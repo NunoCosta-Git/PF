@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# Ambientes virtuais
+.venv/
+venv/
+
+# Testes e ferramentas
+.pytest_cache/
+.coverage
+
+# Ficheiros locais de evidência (não devem ser versionados)
+*.dd
+*.raw
+*.img
+*.E01
+*.E02
+*.ex01
