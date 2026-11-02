@@ -59,10 +59,14 @@ class AppEna(ctk.CTk):
         self.title("E.N.A. | Análise Forense Digital")
         self.geometry("1120x760")
         self.minsize(900, 620)
+        self.grid_rowconfigure(3, weight=1)
 
         self.core = ForenseCore()
         self.caminho_imagem = None
         self.caminho_atual = "/"
+        self.pasta_carving = None
+        self.ficheiros_recuperados = []
+        self.metadados_exif = {}
         self._ocupado = False
         self._a_fechar = False
 
@@ -139,8 +143,36 @@ class AppEna(ctk.CTk):
         )
         self.label_estado.pack(side="left", fill="x", expand=True, padx=14)
 
+        acoes = ctk.CTkFrame(self, fg_color="transparent")
+        acoes.grid(row=2, column=0, sticky="ew", padx=26, pady=(0, 10))
+        self.btn_carving = ctk.CTkButton(
+            acoes,
+            text="Carving JPEG / PNG / PDF",
+            command=self.iniciar_carving,
+            state="disabled",
+            width=205,
+        )
+        self.btn_carving.pack(side="left", padx=(0, 8))
+        self.btn_exif = ctk.CTkButton(
+            acoes,
+            text="Extrair EXIF de imagem",
+            command=self.iniciar_extracao_exif,
+            width=190,
+        )
+        self.btn_exif.pack(side="left", padx=8)
+        self.btn_relatorio = ctk.CTkButton(
+            acoes,
+            text="Gerar relatório PDF",
+            command=self.iniciar_relatorio,
+            state="disabled",
+            width=175,
+            fg_color="#6e40c9",
+            hover_color="#8957e5",
+        )
+        self.btn_relatorio.pack(side="left", padx=8)
+
         corpo = ctk.CTkFrame(self, fg_color="transparent")
-        corpo.grid(row=2, column=0, sticky="nsew", padx=26, pady=(0, 12))
+        corpo.grid(row=3, column=0, sticky="nsew", padx=26, pady=(0, 12))
         corpo.grid_rowconfigure(0, weight=3)
         corpo.grid_rowconfigure(1, weight=2)
         corpo.grid_columnconfigure(0, weight=1)
@@ -214,7 +246,7 @@ class AppEna(ctk.CTk):
             text="Protótipo: trabalha sobre ficheiros de imagem; não substitui bloqueador físico de escrita nem validação forense formal.",
             text_color="#7d8590",
             font=ctk.CTkFont(size=11),
-        ).grid(row=3, column=0, sticky="w", padx=28, pady=(0, 12))
+        ).grid(row=4, column=0, sticky="w", padx=28, pady=(0, 12))
 
     def log(self, mensagem):
         if not self._a_fechar:
@@ -232,8 +264,11 @@ class AppEna(ctk.CTk):
             state="disabled" if ocupado else "normal",
             text=texto_botao or "Abrir imagem de evidência",
         )
-        if ocupado:
-            self.btn_hash.configure(state="disabled")
+        estado_evidencia = "disabled" if ocupado or self.core.img is None else "normal"
+        self.btn_hash.configure(state=estado_evidencia)
+        self.btn_carving.configure(state=estado_evidencia)
+        self.btn_relatorio.configure(state=estado_evidencia)
+        self.btn_exif.configure(state="disabled" if ocupado else "normal")
 
     def selecionar_imagem(self):
         if self._ocupado:
@@ -251,6 +286,9 @@ class AppEna(ctk.CTk):
         self.core.fechar()
         self.caminho_imagem = caminho
         self.caminho_atual = "/"
+        self.pasta_carving = None
+        self.ficheiros_recuperados = []
+        self.metadados_exif = {}
         self._limpar_tabela()
         self.label_estado.configure(text="A abrir imagem…", text_color="#e3b341")
         self.label_metadados.configure(text=caminho)
@@ -275,7 +313,7 @@ class AppEna(ctk.CTk):
         self._definir_ocupado(False)
         self._log_main(mensagem)
         if sucesso:
-            self.btn_hash.configure(state="normal")
+            self._definir_ocupado(False)
             self.label_estado.configure(text="Evidência aberta", text_color="#3fb950")
             tamanho_mb = self.core.tamanho_imagem / (1024 * 1024)
             sistema = self.core.sistema_ficheiros or "não identificado"
@@ -286,7 +324,8 @@ class AppEna(ctk.CTk):
             if self.core.particoes:
                 self._log_main(f"Partições detetadas: {len(self.core.particoes)}")
         else:
-            self.btn_hash.configure(state="disabled")
+            self.caminho_imagem = None
+            self._definir_ocupado(False)
             self.label_estado.configure(text="Não foi possível abrir", text_color="#ff7b72")
             self.label_metadados.configure(text=mensagem)
 
@@ -334,7 +373,6 @@ class AppEna(ctk.CTk):
         if self._a_fechar:
             return
         self._definir_ocupado(False)
-        self.btn_hash.configure(state="normal" if self.core.img else "disabled")
         if not sucesso:
             self._log_main(resultado)
             return
@@ -365,6 +403,167 @@ class AppEna(ctk.CTk):
         else:
             self._log_main(resultado)
             self.label_estado.configure(text="Falha no cálculo do hash", text_color="#ff7b72")
+
+    def iniciar_carving(self):
+        if self._ocupado or not self.caminho_imagem:
+            return
+        pasta = filedialog.askdirectory(
+            title="Escolha a pasta para guardar os ficheiros extraídos",
+            initialdir=os.getcwd(),
+            mustexist=True,
+        )
+        if not pasta:
+            return
+
+        self.pasta_carving = pasta
+        self.ficheiros_recuperados = []
+        self._definir_ocupado(True, "A procurar assinaturas…")
+        self.label_estado.configure(text="A percorrer a imagem…", text_color="#e3b341")
+        self._log_main(
+            "A procurar JPEG, PNG e PDF na imagem lógica completa; "
+            "a pesquisa não se limita a blocos não alocados."
+        )
+        threading.Thread(target=self._executar_carving, args=(pasta,), daemon=True).start()
+
+    def _executar_carving(self, pasta):
+        sucesso, resultado = self.core.fazer_carving(pasta_saida=pasta)
+        self.after(0, self._finalizar_carving, sucesso, resultado)
+
+    def _finalizar_carving(self, sucesso, resultado):
+        if self._a_fechar:
+            return
+        self._definir_ocupado(False)
+        if not sucesso:
+            self._log_main(resultado)
+            self.label_estado.configure(text="Falha no carving", text_color="#ff7b72")
+            return
+
+        self.ficheiros_recuperados = resultado
+        self.label_estado.configure(
+            text=f"Carving concluído: {len(resultado)} ficheiro(s)",
+            text_color="#3fb950",
+        )
+        self._log_main(
+            f"Carving concluído: {len(resultado)} ficheiro(s) extraído(s) "
+            f"para {self.pasta_carving}."
+        )
+        for item in resultado[:20]:
+            self._log_main(
+                f"  - {item['tipo']} {item['nome']} | offset {item['offset']} "
+                f"| {item['tamanho']} bytes"
+            )
+            if item.get("exif"):
+                resumo = ", ".join(
+                    f"{chave}: {valor}" for chave, valor in item["exif"].items()
+                )
+                self._log_main(f"    EXIF: {resumo}")
+        if len(resultado) > 20:
+            self._log_main(f"  ... mais {len(resultado) - 20} ficheiro(s).")
+        self._log_main(
+            "Nota: os resultados são deteções por assinatura; podem incluir dados "
+            "alocados, falsos positivos ou ficheiros incompletos."
+        )
+
+    def iniciar_extracao_exif(self):
+        if self._ocupado:
+            return
+        opcoes = {"title": "Selecione uma imagem para extrair metadados EXIF"}
+        if self.pasta_carving and os.path.isdir(self.pasta_carving):
+            opcoes["initialdir"] = self.pasta_carving
+        opcoes["filetypes"] = [
+            ("Imagens", "*.jpg *.jpeg *.png *.tif *.tiff"),
+            ("Todos os ficheiros", "*.*"),
+        ]
+        caminho = filedialog.askopenfilename(**opcoes)
+        if not caminho:
+            return
+
+        self._definir_ocupado(True, "A ler metadados…")
+        self._log_main(f"A extrair EXIF de {caminho}")
+        threading.Thread(
+            target=self._executar_extracao_exif, args=(caminho,), daemon=True
+        ).start()
+
+    def _executar_extracao_exif(self, caminho):
+        sucesso, resultado = self.core.extrair_exif(caminho)
+        self.after(0, self._finalizar_extracao_exif, caminho, sucesso, resultado)
+
+    def _finalizar_extracao_exif(self, caminho, sucesso, resultado):
+        if self._a_fechar:
+            return
+        self._definir_ocupado(False)
+        if not sucesso:
+            self._log_main(resultado)
+            messagebox.showinfo("Metadados EXIF", resultado, parent=self)
+            return
+
+        self.metadados_exif[caminho] = resultado
+        texto = "\n".join(f"{chave}: {valor}" for chave, valor in resultado.items())
+        self._log_main(f"Metadados EXIF de {os.path.basename(caminho)}:")
+        for linha in texto.splitlines():
+            self._log_main(f"  {linha}")
+        messagebox.showinfo("Metadados EXIF", texto, parent=self)
+
+    def iniciar_relatorio(self):
+        if self._ocupado or not self.caminho_imagem:
+            return
+        caminho_pdf = filedialog.asksaveasfilename(
+            title="Guardar relatório forense",
+            defaultextension=".pdf",
+            filetypes=[("Documento PDF", "*.pdf")],
+            initialfile="relatorio_ena.pdf",
+        )
+        if not caminho_pdf:
+            return
+
+        self._definir_ocupado(True, "A preparar relatório…")
+        self.label_estado.configure(text="A calcular hash para o relatório…", text_color="#e3b341")
+        self._log_main("A recalcular hashes e a preparar o relatório PDF…")
+        threading.Thread(
+            target=self._executar_relatorio,
+            args=(
+                caminho_pdf,
+                self.caminho_imagem,
+                list(self.ficheiros_recuperados),
+                dict(self.metadados_exif),
+            ),
+            daemon=True,
+        ).start()
+
+    def _executar_relatorio(self, caminho_pdf, caminho_imagem, recuperados, metadados_exif):
+        sucesso_hash, hashes = self.core.calcular_hash(caminho_imagem)
+        if not sucesso_hash:
+            self.after(0, self._finalizar_relatorio, False, hashes)
+            return
+
+        sucesso_lista, resultado_lista = self.core.listar_diretorio("/")
+        ficheiros = resultado_lista if sucesso_lista else []
+        sucesso_pdf, mensagem = self.core.gerar_relatorio_pdf(
+            caminho_saida=caminho_pdf,
+            info_imagem=caminho_imagem,
+            lista_ficheiros=ficheiros,
+            hashes=hashes,
+            recuperados=recuperados,
+            metadados_exif=metadados_exif,
+        )
+        if sucesso_pdf and not sucesso_lista:
+            mensagem += (
+                " A imagem não tinha sistema de ficheiros reconhecido; "
+                "a lista da raiz ficou vazia."
+            )
+        self.after(0, self._finalizar_relatorio, sucesso_pdf, mensagem)
+
+    def _finalizar_relatorio(self, sucesso, mensagem):
+        if self._a_fechar:
+            return
+        self._definir_ocupado(False)
+        self._log_main(mensagem)
+        if sucesso:
+            self.label_estado.configure(text="Relatório PDF criado", text_color="#3fb950")
+            messagebox.showinfo("Relatório PDF", mensagem, parent=self)
+        else:
+            self.label_estado.configure(text="Falha ao gerar relatório", text_color="#ff7b72")
+            messagebox.showerror("Relatório PDF", mensagem, parent=self)
 
     def on_close(self):
         if self._ocupado:
