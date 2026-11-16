@@ -1,6 +1,6 @@
 # E.N.A. — Análise Forense Digital
 
-Protótipo académico de uma aplicação desktop multiplataforma para abrir imagens forenses, calcular hashes e navegar nos ficheiros quando o sistema de ficheiros é reconhecido pelo The Sleuth Kit (`pytsk3`). A interface usa CustomTkinter.
+Protótipo académico de uma aplicação desktop para abrir imagens forenses, calcular hashes e navegar nos ficheiros quando o sistema de ficheiros é reconhecido pelo The Sleuth Kit (`pytsk3`). A interface desktop usa Qt através de PySide6.
 
 ## Estado atual (MVP inicial)
 
@@ -26,12 +26,12 @@ Antes de abrir uma imagem, cria ou seleciona um caso e indica o operador. A aber
 3. Executar: `python interface.py`.
 4. Executar os testes: `python -m unittest discover -s tests -v`.
 
-Foi validado neste workspace com Python 3.13 e as dependências do ambiente `venv`. O ambiente `.venv` também existe, mas está vazio; selecionar `venv` como interpretador do VS Code ou usar o caminho do Python desse ambiente.
-No Windows, a aplicação tenta localizar automaticamente os scripts Tcl/Tk junto da instalação base do Python. O suporte E01 foi testado com `ntfs1-gen2.E01` neste workspace.
+Foi validado neste workspace com Python 3.13 e as dependências do ambiente `venv`. Seleciona `venv\Scripts\python.exe` como interpretador do VS Code ou usa diretamente esse executável nos comandos.
+O suporte E01 foi testado com `ntfs1-gen2.E01` neste workspace.
 
 ## Linux
 
-Instalar Python 3, `python3-venv` e as dependências de sistema necessárias para compilar/instalar `pytsk3` e `libewf-python` na distribuição utilizada. Depois, criar um ambiente virtual, instalar `requirements.txt` e executar `python interface.py`. A instalação nativa das bibliotecas deve ser confirmada na versão de Linux alvo antes de declarar paridade entre plataformas.
+Instalar Python 3, `python3-venv` e as dependências de sistema necessárias para instalar `PySide6`, `pytsk3` e `libewf-python` na distribuição utilizada. Depois, criar um ambiente virtual, instalar `requirements.txt` e executar `python interface.py`. A instalação nativa das bibliotecas deve ser confirmada na versão de Linux alvo antes de declarar paridade entre plataformas.
 
 ## Limites importantes
 
@@ -39,10 +39,19 @@ O carving atual é heurístico: percorre a imagem lógica completa, não apenas 
 
 ## Próximas fases
 
-1. Distinguir blocos alocados e não alocados e validar recuperação contra imagens de referência antes de lhe chamar recuperação de apagados.
-2. Expandir a persistência de casos e a auditoria append-only com exportação/verificação independente e proveniência detalhada.
-3. Testes com imagens de referência conhecidas em Windows e Linux; relatório de validação e registo de versões.
-4. Parsers adicionais (por exemplo EVTX/Registry), timeline e pesquisa, cada um com testes de regressão e proveniência.
+O plano recomendado é faseado para estabilizar a integridade antes de aumentar a complexidade:
+
+1. **Consolidar a interface Qt/PySide6:** manter o núcleo forense e a persistência independentes da GUI e validar os fluxos migrados.
+2. **Consolidar MVP/integridade:** comparar hashes com referência e completar proveniência persistida para cada operação.
+3. **Validar sistemas de ficheiros:** testar NTFS/FAT32/ext4 com imagens-fixture e resultados conhecidos; separar listagem de eliminados de recuperação.
+4. **Aquisição delimitada:** implementar aquisição verificada apenas se o âmbito e os recursos de teste forem definidos; caso contrário, manter importação de imagens externas.
+5. **Parsers de artefactos:** adicionar Registry, EVTX ou logs Linux um a um, com testes e referência de origem.
+6. **Pesquisa e timeline:** construir sobre artefactos normalizados e testados.
+7. **Memória e entrega:** integrar Volatility 3 isoladamente e validar instalação, operação offline, backup/restauro e comportamento em Windows/Linux.
+
+PySide6 já substituiu CustomTkinter na interface atual. Cada fase tem critérios de conclusão, riscos e justificação em [docs/planeamento-arquitetura.md](docs/planeamento-arquitetura.md). Se o prazo limitar o âmbito, priorizar uma base pequena testada e identificar claramente o restante como trabalho futuro.
+
+O relatório de projeto descreve também aquisição, análise RAM com Volatility 3, dfVFS e controlo de acesso. A interface agora usa Qt/PySide6; dfVFS, aquisição, RAM e controlo de acesso ainda não estão implementados. A análise começa a partir de imagens já adquiridas; “operador” não significa autenticação, e o uso local/offline ainda não foi validado por teste formal de isolamento de rede.
 
 A proposta detalhada de requisitos, planeamento e arquitetura está em `docs/requisitos.md` e `docs/planeamento-arquitetura.md`.
 

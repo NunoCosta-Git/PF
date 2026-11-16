@@ -16,7 +16,7 @@ Instala as dependências e confirma os módulos, usando sempre o mesmo Python:
 
 ```powershell
 .\venv\Scripts\python.exe -m pip install -r requirements.txt
-.\venv\Scripts\python.exe -c "import customtkinter, pytsk3, pyewf, PIL, reportlab; print('Dependências OK')"
+.\venv\Scripts\python.exe -c "import PySide6, pytsk3, pyewf, PIL, reportlab; print('Dependências OK')"
 ```
 
 No VS Code, seleciona `venv\Scripts\python.exe` como interpretador do workspace. O projeto também pode ter um `.venv` diferente; se selecionares esse ambiente sem dependências, a aplicação pode falhar ao importar os módulos.
@@ -29,11 +29,11 @@ Executa a partir da raiz do projeto:
 .\venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
-O resultado esperado é `OK` para todos os testes. A suite verifica hashes conhecidos, carving de JPEG/PNG/PDF (incluindo assinatura dividida entre blocos), offset e conteúdo extraído, tags EXIF de referência, PDF válido, abertura RAW sem sistema de ficheiros, mensagens de erro e persistência de casos/eventos, incluindo a imutabilidade dos registos.
+O resultado esperado é `OK` para todos os testes. A suite verifica hashes conhecidos, carving de JPEG/PNG/PDF (incluindo assinatura dividida entre blocos), offset e conteúdo extraído, tags EXIF de referência, PDF válido, abertura RAW sem sistema de ficheiros, mensagens de erro, persistência de casos/eventos e inicialização/estado básico da interface Qt. Testa também a imutabilidade dos registos.
 
 ## 3. Teste manual da interface e de E01
 
-1. Inicia a aplicação: `.\venv\Scripts\python.exe .\interface.py`.
+1. Inicia a aplicação Qt: `.\venv\Scripts\python.exe .\interface.py`.
 2. Cria ou seleciona um caso e indica o operador. O registo local é guardado em `dados\ena.sqlite3`.
 3. Escolhe **Abrir imagem de evidência** e seleciona um conjunto E01 de laboratório. Se a imagem tiver segmentos (`.E01`, `.E02`, …), mantém todos os segmentos na mesma pasta.
 4. Confirma no registo que a imagem foi aberta e que o sistema de ficheiros foi reconhecido, se suportado. A evidência e a abertura ficam registadas no caso.

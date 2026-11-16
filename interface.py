@@ -1,69 +1,66 @@
 import os
 import posixpath
 import sys
-import threading
-from pathlib import Path
-from tkinter import filedialog, messagebox, simpledialog, ttk
 
-import customtkinter as ctk
+from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, Signal
+from PySide6.QtWidgets import (
+    QApplication,
+    QComboBox,
+    QDialog,
+    QFileDialog,
+    QHBoxLayout,
+    QLabel,
+    QMainWindow,
+    QMessageBox,
+    QInputDialog,
+    QPushButton,
+    QSplitter,
+    QTableWidget,
+    QTableWidgetItem,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
+)
 
 from core import ForenseCore
 from persistence import PersistenceStore
 
 
-def _configurar_tcl_tk():
-    """Localiza os scripts Tcl/Tk da instalação Python no Windows."""
-    if os.name != "nt":
-        return
-
-    prefixos = (
-        Path(sys.base_prefix) / "tcl",
-        Path(sys.base_prefix) / "Library" / "lib",
-    )
-    bibliotecas = (
-        ("TCL_LIBRARY", "tcl", "init.tcl"),
-        ("TK_LIBRARY", "tk", "tk.tcl"),
-    )
-
-    for variavel, prefixo, ficheiro_necessario in bibliotecas:
-        atual = os.environ.get(variavel)
-        if atual and (Path(atual) / ficheiro_necessario).is_file():
-            continue
-
-        for raiz in prefixos:
-            candidatos = [raiz, *raiz.glob(f"{prefixo}*")] if raiz.is_dir() else []
-            biblioteca = next(
-                (
-                    candidato
-                    for candidato in candidatos
-                    if (candidato / ficheiro_necessario).is_file()
-                ),
-                None,
-            )
-            if biblioteca is not None:
-                os.environ[variavel] = str(biblioteca)
-                break
+class WorkerSignals(QObject):
+    result = Signal(object)
 
 
-_configurar_tcl_tk()
+class WorkerError(Exception):
+    pass
 
 
-ctk.set_appearance_mode("dark")
-ctk.set_default_color_theme("blue")
-
-
-class AppEna(ctk.CTk):
-    """Interface inicial da aplicação E.N.A."""
-
-    def __init__(self):
+class Worker(QRunnable):
+    def __init__(self, function):
         super().__init__()
-        self.title("E.N.A. | Análise Forense Digital")
-        self.geometry("1120x760")
-        self.minsize(900, 620)
-        self.grid_rowconfigure(3, weight=1)
+        self.function = function
+        self.signals = WorkerSignals()
 
-        self.core = ForenseCore()
-        self.store = PersistenceStore()
+    def run(self):
+        try:
+            result = self.function()
+        except Exception as exc:
+            result = WorkerError(f"Erro inesperado na operação: {exc}")
+        self.signals.result.emit((self, result))
+
+
+class AppEna(QMainWindow):
+    """Interface desktop Qt para os fluxos de análise E.N.A."""
+
+    def __init__(self, core=None, store=None):
+        super().__init__()
+        self.setWindowTitle("E.N.A. | Análise Forense Digital")
+        self.resize(1120, 760)
+        self.setMinimumSize(900, 620)
+
+        self.core = core or ForenseCore()
+        self.store = store or PersistenceStore()
+        self.thread_pool = QThreadPool.globalInstance()
+        self._workers = {}
         self._casos_por_rotulo = {}
         self._case_id = None
         self._evidence_id = None
@@ -74,236 +71,189 @@ class AppEna(ctk.CTk):
         self.ficheiros_recuperados = []
         self.metadados_exif = {}
         self._ocupado = False
-        self._a_fechar = False
 
-        self._configurar_estilo_tabela()
         self._construir_interface()
         self._atualizar_casos()
-        self.protocol("WM_DELETE_WINDOW", self.on_close)
         self._log_main(
             "Pronto. Crie ou selecione um caso antes de abrir uma imagem RAW (.dd/.raw) ou E01."
         )
 
-    def _configurar_estilo_tabela(self):
-        estilo = ttk.Style(self)
-        estilo.theme_use("clam")
-        estilo.configure(
-            "Treeview",
-            background="#161b22",
-            foreground="#e6edf3",
-            fieldbackground="#161b22",
-            rowheight=30,
-            borderwidth=0,
-        )
-        estilo.configure(
-            "Treeview.Heading",
-            background="#212936",
-            foreground="#e6edf3",
-            relief="flat",
-            font=("Segoe UI", 10, "bold"),
-        )
-        estilo.map("Treeview", background=[("selected", "#1f6feb")])
-
     def _construir_interface(self):
-        self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(2, weight=1)
+        central = QWidget(self)
+        layout = QVBoxLayout(central)
+        layout.setContentsMargins(22, 18, 22, 14)
+        layout.setSpacing(12)
+        self.setCentralWidget(central)
 
-        cabecalho = ctk.CTkFrame(self, fg_color="transparent")
-        cabecalho.grid(row=0, column=0, sticky="ew", padx=26, pady=(22, 12))
-        cabecalho.grid_columnconfigure(0, weight=1)
-        ctk.CTkLabel(
-            cabecalho,
-            text="E.N.A.",
-            font=ctk.CTkFont(family="Segoe UI", size=30, weight="bold"),
-        ).grid(row=0, column=0, sticky="w")
-        ctk.CTkLabel(
-            cabecalho,
-            text="Análise Forense Digital  •  versão de desenvolvimento",
-            text_color="#9aa7b5",
-            font=ctk.CTkFont(size=13),
-        ).grid(row=1, column=0, sticky="w", pady=(2, 0))
+        titulo = QLabel("E.N.A.  |  Análise Forense Digital")
+        titulo.setObjectName("title")
+        layout.addWidget(titulo)
 
-        barra = ctk.CTkFrame(self, corner_radius=12)
-        barra.grid(row=1, column=0, sticky="ew", padx=26, pady=(0, 14))
-        ctk.CTkLabel(barra, text="Caso:").pack(side="left", padx=(14, 4), pady=12)
-        self.combo_casos = ttk.Combobox(barra, state="readonly", width=17)
-        self.combo_casos.pack(side="left", padx=(0, 6), pady=12)
-        self.combo_casos.bind("<<ComboboxSelected>>", self._selecionar_caso)
-        self.btn_novo_caso = ctk.CTkButton(
-            barra, text="Novo caso", command=self.criar_caso, width=100, height=38
-        )
-        self.btn_novo_caso.pack(side="left", padx=(0, 8), pady=12)
-        self.btn_selecionar = ctk.CTkButton(
-            barra,
-            text="Abrir imagem de evidência",
-            command=self.selecionar_imagem,
-            width=175,
-            height=38,
-        )
-        self.btn_selecionar.pack(side="left", padx=(14, 8), pady=12)
-        self.btn_hash = ctk.CTkButton(
-            barra,
-            text="Calcular MD5 + SHA-256",
-            command=self.iniciar_hash_thread,
-            state="disabled",
-            width=175,
-            height=38,
-            fg_color="#238636",
-            hover_color="#2ea043",
-        )
-        self.btn_hash.pack(side="left", padx=8, pady=12)
-        self.label_estado = ctk.CTkLabel(
-            barra,
-            text="Sem evidência aberta",
-            text_color="#9aa7b5",
-            anchor="w",
-        )
-        self.label_estado.pack(side="left", fill="x", expand=True, padx=14)
+        barra = QHBoxLayout()
+        barra.addWidget(QLabel("Caso:"))
+        self.combo_casos = QComboBox()
+        self.combo_casos.setMinimumWidth(190)
+        self.combo_casos.currentIndexChanged.connect(self._selecionar_caso)
+        barra.addWidget(self.combo_casos)
+        self.btn_novo_caso = QPushButton("Novo caso")
+        self.btn_novo_caso.clicked.connect(self.criar_caso)
+        barra.addWidget(self.btn_novo_caso)
+        self.btn_selecionar = QPushButton("Abrir imagem de evidência")
+        self.btn_selecionar.clicked.connect(self.selecionar_imagem)
+        barra.addWidget(self.btn_selecionar)
+        self.btn_hash = QPushButton("Calcular MD5 + SHA-256")
+        self.btn_hash.clicked.connect(self.iniciar_hash_thread)
+        barra.addWidget(self.btn_hash)
+        self.label_estado = QLabel("Sem evidência aberta")
+        self.label_estado.setObjectName("status")
+        barra.addWidget(self.label_estado, 1)
+        layout.addLayout(barra)
 
-        acoes = ctk.CTkFrame(self, fg_color="transparent")
-        acoes.grid(row=2, column=0, sticky="ew", padx=26, pady=(0, 10))
-        self.btn_carving = ctk.CTkButton(
-            acoes,
-            text="Carving JPEG / PNG / PDF",
-            command=self.iniciar_carving,
-            state="disabled",
-            width=205,
-        )
-        self.btn_carving.pack(side="left", padx=(0, 8))
-        self.btn_exif = ctk.CTkButton(
-            acoes,
-            text="Extrair EXIF de imagem",
-            command=self.iniciar_extracao_exif,
-            width=190,
-        )
-        self.btn_exif.pack(side="left", padx=8)
-        self.btn_relatorio = ctk.CTkButton(
-            acoes,
-            text="Gerar relatório PDF",
-            command=self.iniciar_relatorio,
-            state="disabled",
-            width=175,
-            fg_color="#6e40c9",
-            hover_color="#8957e5",
-        )
-        self.btn_relatorio.pack(side="left", padx=8)
-        self.btn_auditoria = ctk.CTkButton(
-            acoes,
-            text="Ver auditoria do caso",
-            command=self.ver_auditoria,
-            width=175,
-        )
-        self.btn_auditoria.pack(side="left", padx=8)
+        acoes = QHBoxLayout()
+        self.btn_carving = QPushButton("Carving JPEG / PNG / PDF")
+        self.btn_carving.clicked.connect(self.iniciar_carving)
+        acoes.addWidget(self.btn_carving)
+        self.btn_exif = QPushButton("Extrair EXIF de imagem")
+        self.btn_exif.clicked.connect(self.iniciar_extracao_exif)
+        acoes.addWidget(self.btn_exif)
+        self.btn_relatorio = QPushButton("Gerar relatório PDF")
+        self.btn_relatorio.clicked.connect(self.iniciar_relatorio)
+        acoes.addWidget(self.btn_relatorio)
+        self.btn_auditoria = QPushButton("Ver auditoria do caso")
+        self.btn_auditoria.clicked.connect(self.ver_auditoria)
+        acoes.addWidget(self.btn_auditoria)
+        acoes.addStretch(1)
+        layout.addLayout(acoes)
 
-        corpo = ctk.CTkFrame(self, fg_color="transparent")
-        corpo.grid(row=3, column=0, sticky="nsew", padx=26, pady=(0, 12))
-        corpo.grid_rowconfigure(0, weight=3)
-        corpo.grid_rowconfigure(1, weight=2)
-        corpo.grid_columnconfigure(0, weight=1)
+        painel = QWidget()
+        painel_layout = QVBoxLayout(painel)
+        painel_layout.setContentsMargins(0, 0, 0, 0)
+        painel_layout.setSpacing(8)
+        topo = QHBoxLayout()
+        label_ficheiros = QLabel("Conteúdo da imagem")
+        label_ficheiros.setObjectName("sectionTitle")
+        topo.addWidget(label_ficheiros)
+        self.btn_acima = QPushButton("↑ Acima")
+        self.btn_acima.clicked.connect(self.ir_para_pasta_pai)
+        topo.addWidget(self.btn_acima)
+        self.label_caminho = QLabel("/")
+        self.label_caminho.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        topo.addWidget(self.label_caminho, 1)
+        painel_layout.addLayout(topo)
+        self.label_metadados = QLabel("Os detalhes da evidência aparecerão aqui.")
+        self.label_metadados.setWordWrap(True)
+        self.label_metadados.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        painel_layout.addWidget(self.label_metadados)
 
-        painel_ficheiros = ctk.CTkFrame(corpo, corner_radius=12)
-        painel_ficheiros.grid(row=0, column=0, sticky="nsew", pady=(0, 12))
-        painel_ficheiros.grid_rowconfigure(2, weight=1)
-        painel_ficheiros.grid_columnconfigure(0, weight=1)
+        self.tabela = QTableWidget(0, 4)
+        self.tabela.setHorizontalHeaderLabels(["Nome", "Tipo", "Tamanho", "Estado"])
+        self.tabela.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.tabela.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        self.tabela.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.tabela.horizontalHeader().setStretchLastSection(True)
+        self.tabela.horizontalHeader().setSectionResizeMode(0, self.tabela.horizontalHeader().ResizeMode.Stretch)
+        self.tabela.cellDoubleClicked.connect(self.abrir_entrada_selecionada)
+        painel_layout.addWidget(self.tabela, 1)
 
-        topo_ficheiros = ctk.CTkFrame(painel_ficheiros, fg_color="transparent")
-        topo_ficheiros.grid(row=0, column=0, sticky="ew", padx=14, pady=(12, 6))
-        topo_ficheiros.grid_columnconfigure(2, weight=1)
-        ctk.CTkLabel(
-            topo_ficheiros, text="Conteúdo da imagem", font=ctk.CTkFont(size=15, weight="bold")
-        ).grid(row=0, column=0, sticky="w", padx=(0, 14))
-        self.btn_acima = ctk.CTkButton(
-            topo_ficheiros, text="↑ Acima", width=82, command=self.ir_para_pasta_pai
+        log_panel = QWidget()
+        log_layout = QVBoxLayout(log_panel)
+        log_layout.setContentsMargins(0, 0, 0, 0)
+        label_log = QLabel("Registo de atividade")
+        label_log.setObjectName("sectionTitle")
+        log_layout.addWidget(label_log)
+        self.txt_log = QTextEdit()
+        self.txt_log.setReadOnly(True)
+        self.txt_log.setMinimumHeight(130)
+        log_layout.addWidget(self.txt_log)
+
+        splitter = QSplitter(Qt.Orientation.Vertical)
+        splitter.addWidget(painel)
+        splitter.addWidget(log_panel)
+        splitter.setStretchFactor(0, 3)
+        splitter.setStretchFactor(1, 2)
+        layout.addWidget(splitter, 1)
+
+        rodape = QLabel(
+            "Protótipo: trabalha sobre ficheiros de imagem; não substitui bloqueador físico "
+            "de escrita nem validação forense formal."
         )
-        self.btn_acima.grid(row=0, column=1, padx=(0, 10))
-        self.label_caminho = ctk.CTkLabel(
-            topo_ficheiros, text="/", text_color="#9aa7b5", anchor="w"
+        rodape.setObjectName("footer")
+        layout.addWidget(rodape)
+        self.setStyleSheet(
+            """
+            QMainWindow, QWidget { background: #0d1117; color: #e6edf3; }
+            QLineEdit, QComboBox, QTableWidget, QTextEdit {
+                background: #161b22; color: #e6edf3; border: 1px solid #30363d;
+                border-radius: 5px; padding: 5px;
+            }
+            QPushButton {
+                background: #212936; border: 1px solid #30363d; border-radius: 6px;
+                padding: 8px 11px; min-height: 20px;
+            }
+            QPushButton:hover { background: #303b4b; }
+            QPushButton:disabled { color: #7d8590; background: #161b22; }
+            QHeaderView::section {
+                background: #212936; color: #e6edf3; padding: 7px;
+                border: 1px solid #30363d;
+            }
+            QLabel#title { font-size: 25px; font-weight: bold; color: #f0f6fc; }
+            QLabel#sectionTitle { font-size: 15px; font-weight: bold; }
+            QLabel#status { color: #9aa7b5; }
+            QLabel#footer { color: #7d8590; font-size: 10px; }
+            """
         )
-        self.label_caminho.grid(row=0, column=2, sticky="ew")
-
-        self.label_metadados = ctk.CTkLabel(
-            painel_ficheiros,
-            text="Os detalhes da evidência aparecerão aqui.",
-            text_color="#9aa7b5",
-            anchor="w",
-        )
-        self.label_metadados.grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 8))
-
-        tabela_frame = ctk.CTkFrame(painel_ficheiros, fg_color="transparent")
-        tabela_frame.grid(row=2, column=0, sticky="nsew", padx=12, pady=(0, 12))
-        tabela_frame.grid_rowconfigure(0, weight=1)
-        tabela_frame.grid_columnconfigure(0, weight=1)
-        self.tabela = ttk.Treeview(
-            tabela_frame,
-            columns=("tipo", "tamanho", "estado"),
-            show="tree headings",
-            selectmode="browse",
-        )
-        self.tabela.heading("#0", text="Nome")
-        self.tabela.column("#0", width=440, minwidth=180, anchor="w")
-        self.tabela.heading("tipo", text="Tipo")
-        self.tabela.heading("tamanho", text="Tamanho")
-        self.tabela.heading("estado", text="Estado")
-        self.tabela.column("tipo", width=110, anchor="w")
-        self.tabela.column("tamanho", width=140, anchor="e")
-        self.tabela.column("estado", width=110, anchor="center")
-        self.tabela.bind("<Double-1>", self.abrir_entrada_selecionada)
-        barra_vertical = ttk.Scrollbar(tabela_frame, orient="vertical", command=self.tabela.yview)
-        self.tabela.configure(yscrollcommand=barra_vertical.set)
-        self.tabela.grid(row=0, column=0, sticky="nsew")
-        barra_vertical.grid(row=0, column=1, sticky="ns")
-        self.tabela.tag_configure("pasta", foreground="#79c0ff")
-        self.tabela.tag_configure("eliminado", foreground="#ff7b72")
-
-        painel_log = ctk.CTkFrame(corpo, corner_radius=12)
-        painel_log.grid(row=1, column=0, sticky="nsew")
-        painel_log.grid_rowconfigure(1, weight=1)
-        painel_log.grid_columnconfigure(0, weight=1)
-        ctk.CTkLabel(
-            painel_log, text="Registo de atividade", font=ctk.CTkFont(size=15, weight="bold")
-        ).grid(row=0, column=0, sticky="w", padx=14, pady=(12, 6))
-        self.txt_log = ctk.CTkTextbox(painel_log, height=125, font=ctk.CTkFont(size=12))
-        self.txt_log.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 12))
-
-        ctk.CTkLabel(
-            self,
-            text="Protótipo: trabalha sobre ficheiros de imagem; não substitui bloqueador físico de escrita nem validação forense formal.",
-            text_color="#7d8590",
-            font=ctk.CTkFont(size=11),
-        ).grid(row=4, column=0, sticky="w", padx=28, pady=(0, 12))
-
-    def log(self, mensagem):
-        if not self._a_fechar:
-            self.after(0, self._log_main, mensagem)
+        self._definir_ocupado(False)
 
     def _log_main(self, mensagem):
-        if self._a_fechar:
+        self.txt_log.append(mensagem)
+
+    def _start_worker(self, function, callback):
+        worker = Worker(function)
+        self._workers[worker] = callback
+        worker.signals.result.connect(self._handle_worker_result)
+        self.thread_pool.start(worker)
+
+    def _handle_worker_result(self, payload):
+        worker, resultado = payload
+        callback = self._workers.pop(worker, None)
+        if callback is None:
             return
-        self.txt_log.insert("end", mensagem + "\n")
-        self.txt_log.see("end")
+        if isinstance(resultado, WorkerError):
+            self._definir_ocupado(False)
+            self._set_estado("Falha na operação", "#ff7b72")
+            self._log_main(str(resultado))
+            QMessageBox.critical(self, "Erro", str(resultado))
+            return
+        callback(resultado)
+
+    def _set_estado(self, texto, cor=None):
+        self.label_estado.setText(texto)
+        self.label_estado.setStyleSheet(f"color: {cor};" if cor else "")
 
     def _definir_ocupado(self, ocupado, texto_botao=None):
         self._ocupado = ocupado
-        self.combo_casos.configure(state="disabled" if ocupado else "readonly")
-        self.btn_novo_caso.configure(state="disabled" if ocupado else "normal")
-        self.btn_selecionar.configure(
-            state="disabled" if ocupado else "normal",
-            text=texto_botao or "Abrir imagem de evidência",
-        )
-        estado_evidencia = "disabled" if ocupado or self.core.img is None else "normal"
-        self.btn_hash.configure(state=estado_evidencia)
-        self.btn_carving.configure(state=estado_evidencia)
-        self.btn_relatorio.configure(state=estado_evidencia)
-        self.btn_auditoria.configure(state="disabled" if ocupado else "normal")
-        self.btn_exif.configure(state="disabled" if ocupado else "normal")
+        self.combo_casos.setEnabled(not ocupado)
+        self.btn_novo_caso.setEnabled(not ocupado)
+        self.btn_selecionar.setEnabled(not ocupado)
+        self.btn_selecionar.setText(texto_botao or "Abrir imagem de evidência")
+        evidencia_disponivel = not ocupado and self.core.img is not None
+        self.btn_hash.setEnabled(evidencia_disponivel)
+        self.btn_carving.setEnabled(evidencia_disponivel)
+        self.btn_relatorio.setEnabled(evidencia_disponivel)
+        self.btn_exif.setEnabled(not ocupado)
+        self.btn_auditoria.setEnabled(not ocupado and self._case_id is not None)
+        self.btn_acima.setEnabled(not ocupado and self.core.fs is not None)
 
     def _atualizar_casos(self, selecionar_id=None):
         casos = self.store.list_cases()
         self._casos_por_rotulo = {
             f"{caso['name']} [{caso['id'][:8]}]": caso["id"] for caso in casos
         }
-        rotulos = list(self._casos_por_rotulo)
-        self.combo_casos.configure(values=rotulos)
+        self.combo_casos.blockSignals(True)
+        self.combo_casos.clear()
+        self.combo_casos.addItem("")
+        for rotulo in self._casos_por_rotulo:
+            self.combo_casos.addItem(rotulo)
         if selecionar_id:
             rotulo = next(
                 (nome for nome, case_id in self._casos_por_rotulo.items()
@@ -311,83 +261,79 @@ class AppEna(ctk.CTk):
                 None,
             )
             if rotulo:
-                self.combo_casos.set(rotulo)
+                self.combo_casos.setCurrentText(rotulo)
                 self._case_id = selecionar_id
-                return
-        if self._case_id not in self._casos_por_rotulo.values():
+        elif self._case_id not in self._casos_por_rotulo.values():
             self._case_id = None
-            self.combo_casos.set("")
+        elif self._case_id:
+            rotulo = next(
+                nome for nome, case_id in self._casos_por_rotulo.items()
+                if case_id == self._case_id
+            )
+            self.combo_casos.setCurrentText(rotulo)
+        self.combo_casos.blockSignals(False)
+        self._definir_ocupado(self._ocupado)
 
-    def _selecionar_caso(self, _evento=None):
-        self._case_id = self._casos_por_rotulo.get(self.combo_casos.get())
+    def _selecionar_caso(self, _indice=None):
+        self._case_id = self._casos_por_rotulo.get(self.combo_casos.currentText())
         if self._case_id:
-            self._log_main(f"Caso selecionado: {self.combo_casos.get()}")
+            self._log_main(f"Caso selecionado: {self.combo_casos.currentText()}")
+        self._definir_ocupado(self._ocupado)
 
     def criar_caso(self):
-        nome = simpledialog.askstring("Novo caso", "Nome ou referência do caso:", parent=self)
-        if nome is None:
+        nome, aceite = QInputDialog.getText(
+            self, "Novo caso", "Nome ou referência do caso:"
+        )
+        if not aceite or not nome.strip():
             return
-        operador = simpledialog.askstring("Novo caso", "Nome do operador:", parent=self)
-        if operador is None:
+        operador, aceite = QInputDialog.getText(self, "Novo caso", "Nome do operador:")
+        if not aceite:
             return
         try:
-            case_id = self.store.create_case(nome, operador)
+            case_id = self.store.create_case(nome.strip(), operador.strip())
             self._atualizar_casos(selecionar_id=case_id)
-        except (ValueError, OSError) as exc:
-            messagebox.showerror("Novo caso", str(exc), parent=self)
-            return
         except Exception as exc:
-            messagebox.showerror(
-                "Novo caso", f"Não foi possível guardar o caso: {exc}", parent=self
-            )
+            QMessageBox.critical(self, "Novo caso", f"Não foi possível guardar o caso: {exc}")
             return
         self._log_main(f"Caso criado: {nome.strip()} | operador: {operador.strip()}")
 
     def ver_auditoria(self):
         if not self._case_id:
-            messagebox.showwarning(
-                "Auditoria", "Selecione um caso para consultar o histórico.", parent=self
-            )
+            QMessageBox.warning(self, "Auditoria", "Selecione um caso para consultar o histórico.")
             return
         try:
             eventos = self.store.list_events(self._case_id)
         except Exception as exc:
-            messagebox.showerror(
-                "Auditoria", f"Não foi possível ler o histórico: {exc}", parent=self
-            )
+            QMessageBox.critical(self, "Auditoria", f"Não foi possível ler o histórico: {exc}")
             return
-
-        janela = ctk.CTkToplevel(self)
-        janela.title("Auditoria do caso")
-        janela.geometry("900x480")
-        janela.transient(self)
-        texto = ctk.CTkTextbox(janela, wrap="word")
-        texto.pack(fill="both", expand=True, padx=14, pady=14)
+        janela = QDialog(self)
+        janela.setWindowTitle("Auditoria do caso")
+        janela.resize(900, 480)
+        layout = QVBoxLayout(janela)
+        texto = QTextEdit()
+        texto.setReadOnly(True)
         for evento in eventos:
-            texto.insert(
-                "end",
+            texto.append(
                 f"{evento['occurred_at']} | {evento['operator']} | {evento['action']}\n"
                 f"  Evidência: {evento['evidence_id'] or '—'}\n"
-                f"  Detalhes: {evento['details_json']}\n\n",
+                f"  Detalhes: {evento['details_json']}\n"
             )
-        texto.configure(state="disabled")
+        layout.addWidget(texto)
+        janela.exec()
 
     def selecionar_imagem(self):
         if self._ocupado:
             return
         if not self._case_id:
-            messagebox.showwarning(
-                "Caso obrigatório",
-                "Crie ou selecione um caso antes de abrir uma evidência.",
-                parent=self,
+            QMessageBox.warning(
+                self, "Caso obrigatório", "Crie ou selecione um caso antes de abrir uma evidência."
             )
             return
-        caminho = filedialog.askopenfilename(
-            title="Selecione uma imagem forense",
-            filetypes=[
-                ("Imagens RAW/EWF", "*.dd *.raw *.img *.e01 *.ex01"),
-                ("Todos os ficheiros", "*.*"),
-            ],
+        caminho, _ = QFileDialog.getOpenFileName(
+            self,
+            "Selecione uma imagem forense",
+            "",
+            "Imagens RAW/EWF (*.dd *.raw *.img *.e01 *.ex01);;Todos os ficheiros (*)",
         )
         if not caminho:
             return
@@ -401,26 +347,25 @@ class AppEna(ctk.CTk):
         self.ficheiros_recuperados = []
         self.metadados_exif = {}
         self._limpar_tabela()
-        self.label_estado.configure(text="A abrir imagem…", text_color="#e3b341")
-        self.label_metadados.configure(text=caminho)
+        self.label_metadados.setText(caminho)
+        self._set_estado("A abrir imagem…", "#e3b341")
         self._definir_ocupado(True, "A abrir…")
         self._log_main(f"A abrir imagem: {caminho}")
-        threading.Thread(
-            target=self._abrir_e_listar,
-            args=(caminho, self._case_id),
-            daemon=True,
-        ).start()
+        case_id = self._case_id
+        self._start_worker(
+            lambda: self._abrir_e_listar(caminho, case_id),
+            self._finalizar_abertura,
+        )
 
     def _abrir_e_listar(self, caminho, case_id):
         sucesso, mensagem = self.core.abrir_imagem(caminho)
         if not sucesso:
-            erro_auditoria = self._registar_evento(
+            erro = self._registar_evento(
                 case_id, None, "image_open_failed", {"path": caminho, "error": mensagem}
             )
-            if erro_auditoria:
-                mensagem += f" Falha ao registar a auditoria: {erro_auditoria}"
-            self.after(0, self._finalizar_abertura, False, mensagem, [], None, None)
-            return
+            if erro:
+                mensagem += f" Falha ao registar a auditoria: {erro}"
+            return False, mensagem, [], None, None
 
         try:
             evidence_id = self.store.register_evidence(
@@ -428,9 +373,7 @@ class AppEna(ctk.CTk):
             )
         except Exception as exc:
             self.core.fechar()
-            self.after(
-                0,
-                self._finalizar_abertura,
+            return (
                 False,
                 f"A imagem abriu, mas não foi possível registar a evidência; "
                 f"a análise foi interrompida: {exc}",
@@ -438,50 +381,40 @@ class AppEna(ctk.CTk):
                 None,
                 None,
             )
-            return
 
         sucesso_lista, resultado = self.core.listar_diretorio("/")
         entradas = resultado if sucesso_lista else []
-        detalhe = mensagem if sucesso_lista else f"{mensagem} {resultado}"
+        mensagem_lista = mensagem if sucesso_lista else f"{mensagem} {resultado}"
         acao = "directory_listed" if sucesso_lista else "directory_list_unavailable"
         detalhes = (
             {"path": "/", "entries": len(entradas)}
             if sucesso_lista
             else {"path": "/", "reason": resultado}
         )
-        erro_auditoria = self._registar_evento(
-            case_id, evidence_id, acao, detalhes
-        )
-        if erro_auditoria:
+        erro = self._registar_evento(case_id, evidence_id, acao, detalhes)
+        if erro:
             self.core.fechar()
-            self.after(
-                0,
-                self._finalizar_abertura,
+            return (
                 False,
-                f"A evidência foi registada, mas a auditoria da listagem falhou: "
-                f"{erro_auditoria}",
+                f"A evidência foi registada, mas a auditoria da listagem falhou: {erro}",
                 [],
                 None,
                 None,
             )
-            return
-        self.after(
-            0, self._finalizar_abertura, True, detalhe, entradas, evidence_id, case_id
-        )
+        return True, mensagem_lista, entradas, evidence_id, case_id
 
-    def _finalizar_abertura(self, sucesso, mensagem, entradas, evidence_id, case_id):
-        if self._a_fechar:
-            return
+    def _finalizar_abertura(self, resultado):
+        sucesso, mensagem, entradas, evidence_id, case_id = resultado
         self._definir_ocupado(False)
         self._log_main(mensagem)
         if sucesso:
             self._evidence_id = evidence_id
             self._evidence_case_id = case_id
-            self.label_estado.configure(text="Evidência aberta", text_color="#3fb950")
+            self._set_estado("Evidência aberta", "#3fb950")
             tamanho_mb = self.core.tamanho_imagem / (1024 * 1024)
             sistema = self.core.sistema_ficheiros or "não identificado"
-            self.label_metadados.configure(
-                text=f"{self.caminho_imagem}   •   {tamanho_mb:,.2f} MiB   •   FS: {sistema}"
+            self.label_metadados.setText(
+                f"{self.caminho_imagem}   •   {tamanho_mb:,.2f} MiB   •   FS: {sistema}"
             )
             self._mostrar_entradas(entradas)
             if self.core.particoes:
@@ -490,33 +423,34 @@ class AppEna(ctk.CTk):
             self.caminho_imagem = None
             self._evidence_id = None
             self._evidence_case_id = None
-            self._definir_ocupado(False)
-            self.label_estado.configure(text="Não foi possível abrir", text_color="#ff7b72")
-            self.label_metadados.configure(text=mensagem)
+            self._set_estado("Não foi possível abrir", "#ff7b72")
+            self.label_metadados.setText(mensagem)
 
     def _limpar_tabela(self):
-        for item in self.tabela.get_children():
-            self.tabela.delete(item)
+        self.tabela.setRowCount(0)
 
     def _mostrar_entradas(self, entradas):
         self._limpar_tabela()
-        for entrada in sorted(entradas, key=lambda item: (not item["diretorio"], item["nome"].casefold())):
+        entradas_ordenadas = sorted(
+            entradas, key=lambda item: (not item["diretorio"], item["nome"].casefold())
+        )
+        for entrada in entradas_ordenadas:
+            linha = self.tabela.rowCount()
+            self.tabela.insertRow(linha)
             tipo = "Pasta" if entrada["diretorio"] else "Ficheiro"
             tamanho = "—" if entrada["diretorio"] else f"{entrada['tamanho']:,} B"
             estado = "Eliminado" if entrada["eliminado"] else "Alocado"
-            tag = "pasta" if entrada["diretorio"] else "eliminado" if entrada["eliminado"] else ""
-            self.tabela.insert(
-                "", "end", text=entrada["nome"], values=(tipo, tamanho, estado), tags=(tag,)
-            )
-        self.label_caminho.configure(text=self.caminho_atual)
+            for coluna, valor in enumerate((entrada["nome"], tipo, tamanho, estado)):
+                item = QTableWidgetItem(valor)
+                item.setData(Qt.ItemDataRole.UserRole, entrada)
+                self.tabela.setItem(linha, coluna, item)
+        self.label_caminho.setText(self.caminho_atual)
 
-    def abrir_entrada_selecionada(self, _evento=None):
-        selecionados = self.tabela.selection()
-        if not selecionados:
-            return
-        item = self.tabela.item(selecionados[0])
-        if item["values"] and item["values"][0] == "Pasta":
-            self._navegar(posixpath.normpath(posixpath.join(self.caminho_atual, item["text"])))
+    def abrir_entrada_selecionada(self, linha, _coluna):
+        item = self.tabela.item(linha, 0)
+        entrada = item.data(Qt.ItemDataRole.UserRole) if item else None
+        if entrada and entrada["diretorio"]:
+            self._navegar(posixpath.normpath(posixpath.join(self.caminho_atual, entrada["nome"])))
 
     def ir_para_pasta_pai(self):
         if self.caminho_atual != "/":
@@ -526,54 +460,54 @@ class AppEna(ctk.CTk):
         if self._ocupado:
             return
         self._definir_ocupado(True, "A listar…")
-        threading.Thread(
-            target=self._listar_diretorio_thread, args=(caminho,), daemon=True
-        ).start()
+        self._start_worker(
+            lambda: self._listar_diretorio_thread(caminho),
+            lambda resultado: self._finalizar_navegacao(caminho, resultado),
+        )
 
     def _listar_diretorio_thread(self, caminho):
         sucesso, resultado = self.core.listar_diretorio(caminho)
         if sucesso:
-            erro_auditoria = self._registar_evento(
+            erro = self._registar_evento(
                 self._evidence_case_id,
                 self._evidence_id,
                 "directory_listed",
                 {"path": caminho, "entries": len(resultado)},
             )
-            if erro_auditoria:
-                sucesso = False
-                resultado = f"Diretório lido, mas a auditoria falhou: {erro_auditoria}"
+            if erro:
+                return False, f"Diretório lido, mas a auditoria falhou: {erro}"
         else:
-            erro_auditoria = self._registar_evento(
+            erro = self._registar_evento(
                 self._evidence_case_id,
                 self._evidence_id,
                 "directory_list_failed",
                 {"path": caminho, "error": resultado},
             )
-            if erro_auditoria:
-                resultado += f" Falha ao registar a auditoria: {erro_auditoria}"
-        self.after(0, self._finalizar_navegacao, caminho, sucesso, resultado)
+            if erro:
+                resultado += f" Falha ao registar a auditoria: {erro}"
+        return sucesso, resultado
 
-    def _finalizar_navegacao(self, caminho, sucesso, resultado):
-        if self._a_fechar:
-            return
+    def _finalizar_navegacao(self, caminho, resultado):
+        sucesso, entradas = resultado
         self._definir_ocupado(False)
         if not sucesso:
-            self._log_main(resultado)
+            self._log_main(entradas)
             return
         self.caminho_atual = caminho
-        self._mostrar_entradas(resultado)
-        self._log_main(f"Diretório aberto: {caminho} ({len(resultado)} entradas)")
+        self._mostrar_entradas(entradas)
+        self._log_main(f"Diretório aberto: {caminho} ({len(entradas)} entradas)")
 
     def iniciar_hash_thread(self):
         if self._ocupado or not self.caminho_imagem:
             return
         self._definir_ocupado(True, "A calcular hashes…")
         self._log_main("A calcular MD5 e SHA-256 por leitura sequencial…")
-        threading.Thread(
-            target=self._executar_hash,
-            args=(self.caminho_imagem, self._evidence_case_id, self._evidence_id),
-            daemon=True,
-        ).start()
+        caminho = self.caminho_imagem
+        case_id, evidence_id = self._evidence_case_id, self._evidence_id
+        self._start_worker(
+            lambda: self._executar_hash(caminho, case_id, evidence_id),
+            self._finalizar_hash,
+        )
 
     def _executar_hash(self, caminho, case_id, evidence_id):
         sucesso, resultado = self.core.calcular_hash(caminho)
@@ -583,36 +517,31 @@ class AppEna(ctk.CTk):
                     case_id, evidence_id, resultado["md5"], resultado["sha256"]
                 )
             except Exception as exc:
-                sucesso = False
-                resultado = f"Hashes calculados, mas não foi possível persistir o resultado: {exc}"
+                return False, f"Hashes calculados, mas não foi possível persistir o resultado: {exc}"
         else:
-            erro_auditoria = self._registar_evento(
+            erro = self._registar_evento(
                 case_id, evidence_id, "hash_calculation_failed", {"error": resultado}
             )
-            if erro_auditoria:
-                resultado += f" Falha ao registar a auditoria: {erro_auditoria}"
-        self.after(0, self._finalizar_hash, sucesso, resultado)
+            if erro:
+                resultado += f" Falha ao registar a auditoria: {erro}"
+        return sucesso, resultado
 
-    def _finalizar_hash(self, sucesso, resultado):
-        if self._a_fechar:
-            return
+    def _finalizar_hash(self, resultado):
+        sucesso, hashes = resultado
         self._definir_ocupado(False)
-        self.btn_hash.configure(state="normal", text="Calcular MD5 + SHA-256")
         if sucesso:
-            self._log_main(f"MD5:    {resultado['md5']}")
-            self._log_main(f"SHA256: {resultado['sha256']}")
-            self.label_estado.configure(text="Hash calculado", text_color="#3fb950")
+            self._log_main(f"MD5:    {hashes['md5']}")
+            self._log_main(f"SHA256: {hashes['sha256']}")
+            self._set_estado("Hash calculado", "#3fb950")
         else:
-            self._log_main(resultado)
-            self.label_estado.configure(text="Falha no cálculo do hash", text_color="#ff7b72")
+            self._log_main(hashes)
+            self._set_estado("Falha no cálculo do hash", "#ff7b72")
 
     def iniciar_carving(self):
         if self._ocupado or not self.caminho_imagem:
             return
-        pasta = filedialog.askdirectory(
-            title="Escolha a pasta para guardar os ficheiros extraídos",
-            initialdir=os.getcwd(),
-            mustexist=True,
+        pasta = QFileDialog.getExistingDirectory(
+            self, "Escolha a pasta para guardar os ficheiros extraídos", os.getcwd()
         )
         if not pasta:
             return
@@ -620,16 +549,16 @@ class AppEna(ctk.CTk):
         self.pasta_carving = pasta
         self.ficheiros_recuperados = []
         self._definir_ocupado(True, "A procurar assinaturas…")
-        self.label_estado.configure(text="A percorrer a imagem…", text_color="#e3b341")
+        self._set_estado("A percorrer a imagem…", "#e3b341")
         self._log_main(
             "A procurar JPEG, PNG e PDF na imagem lógica completa; "
             "a pesquisa não se limita a blocos não alocados."
         )
-        threading.Thread(
-            target=self._executar_carving,
-            args=(pasta, self._evidence_case_id, self._evidence_id),
-            daemon=True,
-        ).start()
+        case_id, evidence_id = self._evidence_case_id, self._evidence_id
+        self._start_worker(
+            lambda: self._executar_carving(pasta, case_id, evidence_id),
+            self._finalizar_carving,
+        )
 
     def _executar_carving(self, pasta, case_id, evidence_id):
         sucesso, resultado = self.core.fazer_carving(pasta_saida=pasta)
@@ -652,33 +581,26 @@ class AppEna(ctk.CTk):
             if sucesso
             else {"error": resultado}
         )
-        erro_auditoria = self._registar_evento(
-            case_id, evidence_id, acao, detalhes
-        )
-        if erro_auditoria:
-            sucesso = False
-            resultado = f"{resultado}; falha ao registar a auditoria: {erro_auditoria}"
-        self.after(0, self._finalizar_carving, sucesso, resultado)
+        erro = self._registar_evento(case_id, evidence_id, acao, detalhes)
+        if erro:
+            return False, f"{resultado}; falha ao registar a auditoria: {erro}"
+        return sucesso, resultado
 
-    def _finalizar_carving(self, sucesso, resultado):
-        if self._a_fechar:
-            return
+    def _finalizar_carving(self, resultado):
+        sucesso, recuperados = resultado
         self._definir_ocupado(False)
         if not sucesso:
-            self._log_main(resultado)
-            self.label_estado.configure(text="Falha no carving", text_color="#ff7b72")
+            self._log_main(recuperados)
+            self._set_estado("Falha no carving", "#ff7b72")
             return
 
-        self.ficheiros_recuperados = resultado
-        self.label_estado.configure(
-            text=f"Carving concluído: {len(resultado)} ficheiro(s)",
-            text_color="#3fb950",
-        )
+        self.ficheiros_recuperados = recuperados
+        self._set_estado(f"Carving concluído: {len(recuperados)} ficheiro(s)", "#3fb950")
         self._log_main(
-            f"Carving concluído: {len(resultado)} ficheiro(s) extraído(s) "
-            f"para {self.pasta_carving}."
+            f"Carving concluído: {len(recuperados)} ficheiro(s) extraído(s) para "
+            f"{self.pasta_carving}."
         )
-        for item in resultado[:20]:
+        for item in recuperados[:20]:
             self._log_main(
                 f"  - {item['tipo']} {item['nome']} | offset {item['offset']} "
                 f"| {item['tamanho']} bytes"
@@ -688,50 +610,38 @@ class AppEna(ctk.CTk):
                     f"{chave}: {valor}" for chave, valor in item["exif"].items()
                 )
                 self._log_main(f"    EXIF: {resumo}")
-        if len(resultado) > 20:
-            self._log_main(f"  ... mais {len(resultado) - 20} ficheiro(s).")
+        if len(recuperados) > 20:
+            self._log_main(f"  ... mais {len(recuperados) - 20} ficheiro(s).")
         self._log_main(
-            "Nota: os resultados são deteções por assinatura; podem incluir dados "
-            "alocados, falsos positivos ou ficheiros incompletos."
+            "Nota: deteções por assinatura podem incluir dados alocados, falsos positivos "
+            "ou ficheiros incompletos."
         )
 
     def iniciar_extracao_exif(self):
         if self._ocupado:
             return
         if not self._case_id:
-            messagebox.showwarning(
-                "Caso obrigatório",
-                "Crie ou selecione um caso antes de extrair metadados.",
-                parent=self,
-            )
+            QMessageBox.warning(self, "Caso obrigatório", "Crie ou selecione um caso.")
             return
-        opcoes = {"title": "Selecione uma imagem para extrair metadados EXIF"}
-        if self.pasta_carving and os.path.isdir(self.pasta_carving):
-            opcoes["initialdir"] = self.pasta_carving
-        opcoes["filetypes"] = [
-            ("Imagens", "*.jpg *.jpeg *.png *.tif *.tiff"),
-            ("Todos os ficheiros", "*.*"),
-        ]
-        caminho = filedialog.askopenfilename(**opcoes)
+        caminho, _ = QFileDialog.getOpenFileName(
+            self,
+            "Selecione uma imagem para extrair metadados EXIF",
+            self.pasta_carving or "",
+            "Imagens (*.jpg *.jpeg *.png *.tif *.tiff);;Todos os ficheiros (*)",
+        )
         if not caminho:
             return
-
-        evidence_id = (
-            self._evidence_id
-            if self._evidence_case_id == self._case_id
-            else None
-        )
+        evidence_id = self._evidence_id if self._evidence_case_id == self._case_id else None
         self._definir_ocupado(True, "A ler metadados…")
         self._log_main(f"A extrair EXIF de {caminho}")
-        threading.Thread(
-            target=self._executar_extracao_exif,
-            args=(caminho, self._case_id, evidence_id),
-            daemon=True,
-        ).start()
+        self._start_worker(
+            lambda: self._executar_extracao_exif(caminho, self._case_id, evidence_id),
+            lambda resultado: self._finalizar_extracao_exif(caminho, resultado),
+        )
 
     def _executar_extracao_exif(self, caminho, case_id, evidence_id):
         sucesso, resultado = self.core.extrair_exif(caminho)
-        erro_auditoria = self._registar_evento(
+        erro = self._registar_evento(
             case_id,
             evidence_id,
             "exif_extracted" if sucesso else "exif_extraction_failed",
@@ -739,78 +649,65 @@ class AppEna(ctk.CTk):
             if sucesso
             else {"path": caminho, "error": resultado},
         )
-        if erro_auditoria:
-            sucesso = False
-            resultado = f"{resultado}; falha ao registar a auditoria: {erro_auditoria}"
-        self.after(0, self._finalizar_extracao_exif, caminho, sucesso, resultado)
+        if erro:
+            return False, f"{resultado}; falha ao registar a auditoria: {erro}"
+        return sucesso, resultado
 
-    def _finalizar_extracao_exif(self, caminho, sucesso, resultado):
-        if self._a_fechar:
-            return
+    def _finalizar_extracao_exif(self, caminho, resultado):
+        sucesso, metadados = resultado
         self._definir_ocupado(False)
         if not sucesso:
-            self._log_main(resultado)
-            messagebox.showinfo("Metadados EXIF", resultado, parent=self)
+            self._log_main(metadados)
+            QMessageBox.information(self, "Metadados EXIF", metadados)
             return
-
-        self.metadados_exif[caminho] = resultado
-        texto = "\n".join(f"{chave}: {valor}" for chave, valor in resultado.items())
+        self.metadados_exif[caminho] = metadados
+        texto = "\n".join(f"{chave}: {valor}" for chave, valor in metadados.items())
         self._log_main(f"Metadados EXIF de {os.path.basename(caminho)}:")
         for linha in texto.splitlines():
             self._log_main(f"  {linha}")
-        messagebox.showinfo("Metadados EXIF", texto, parent=self)
+        QMessageBox.information(self, "Metadados EXIF", texto)
 
     def iniciar_relatorio(self):
         if self._ocupado or not self.caminho_imagem:
             return
-        caminho_pdf = filedialog.asksaveasfilename(
-            title="Guardar relatório forense",
-            defaultextension=".pdf",
-            filetypes=[("Documento PDF", "*.pdf")],
-            initialfile="relatorio_ena.pdf",
+        caminho_pdf, _ = QFileDialog.getSaveFileName(
+            self, "Guardar relatório forense", "relatorio_ena.pdf", "Documento PDF (*.pdf)"
         )
         if not caminho_pdf:
             return
 
         self._definir_ocupado(True, "A preparar relatório…")
-        self.label_estado.configure(text="A calcular hash para o relatório…", text_color="#e3b341")
+        self._set_estado("A calcular hash para o relatório…", "#e3b341")
         self._log_main("A recalcular hashes e a preparar o relatório PDF…")
-        threading.Thread(
-            target=self._executar_relatorio,
-            args=(
-                caminho_pdf,
-                self.caminho_imagem,
-                list(self.ficheiros_recuperados),
-                dict(self.metadados_exif),
-                self._evidence_case_id,
-                self._evidence_id,
-            ),
-            daemon=True,
-        ).start()
+        parametros = (
+            caminho_pdf,
+            self.caminho_imagem,
+            list(self.ficheiros_recuperados),
+            dict(self.metadados_exif),
+            self._evidence_case_id,
+            self._evidence_id,
+        )
+        self._start_worker(
+            lambda: self._executar_relatorio(*parametros),
+            self._finalizar_relatorio,
+        )
 
     def _executar_relatorio(
         self, caminho_pdf, caminho_imagem, recuperados, metadados_exif, case_id, evidence_id
     ):
         sucesso_hash, hashes = self.core.calcular_hash(caminho_imagem)
         if not sucesso_hash:
-            erro_auditoria = self._registar_evento(
+            erro = self._registar_evento(
                 case_id, evidence_id, "report_generation_failed", {"error": hashes}
             )
-            if erro_auditoria:
-                hashes += f" Falha ao registar a auditoria: {erro_auditoria}"
-            self.after(0, self._finalizar_relatorio, False, hashes)
-            return
+            if erro:
+                hashes += f" Falha ao registar a auditoria: {erro}"
+            return False, hashes
 
         try:
             self.store.record_hashes(case_id, evidence_id, hashes["md5"], hashes["sha256"])
         except Exception as exc:
-            self.after(
-                0,
-                self._finalizar_relatorio,
-                False,
-                f"Não foi possível persistir os hashes calculados para o relatório: {exc}",
-            )
-            return
+            return False, f"Não foi possível persistir os hashes calculados para o relatório: {exc}"
 
         sucesso_lista, resultado_lista = self.core.listar_diretorio("/")
         ficheiros = resultado_lista if sucesso_lista else []
@@ -833,13 +730,21 @@ class AppEna(ctk.CTk):
             if sucesso_pdf
             else {"path": caminho_pdf, "error": mensagem}
         )
-        erro_auditoria = self._registar_evento(
-            case_id, evidence_id, acao, detalhes
-        )
-        if erro_auditoria:
-            sucesso_pdf = False
-            mensagem = f"{mensagem}; falha ao registar a auditoria: {erro_auditoria}"
-        self.after(0, self._finalizar_relatorio, sucesso_pdf, mensagem)
+        erro = self._registar_evento(case_id, evidence_id, acao, detalhes)
+        if erro:
+            return False, f"{mensagem}; falha ao registar a auditoria: {erro}"
+        return sucesso_pdf, mensagem
+
+    def _finalizar_relatorio(self, resultado):
+        sucesso, mensagem = resultado
+        self._definir_ocupado(False)
+        self._log_main(mensagem)
+        if sucesso:
+            self._set_estado("Relatório PDF criado", "#3fb950")
+            QMessageBox.information(self, "Relatório PDF", mensagem)
+        else:
+            self._set_estado("Falha ao gerar relatório", "#ff7b72")
+            QMessageBox.critical(self, "Relatório PDF", mensagem)
 
     def _registar_evento(self, case_id, evidence_id, action, details):
         if not case_id:
@@ -850,31 +755,26 @@ class AppEna(ctk.CTk):
             return str(exc)
         return None
 
-    def _finalizar_relatorio(self, sucesso, mensagem):
-        if self._a_fechar:
-            return
-        self._definir_ocupado(False)
-        self._log_main(mensagem)
-        if sucesso:
-            self.label_estado.configure(text="Relatório PDF criado", text_color="#3fb950")
-            messagebox.showinfo("Relatório PDF", mensagem, parent=self)
-        else:
-            self.label_estado.configure(text="Falha ao gerar relatório", text_color="#ff7b72")
-            messagebox.showerror("Relatório PDF", mensagem, parent=self)
-
-    def on_close(self):
+    def closeEvent(self, evento):
         if self._ocupado:
-            messagebox.showwarning(
+            QMessageBox.warning(
+                self,
                 "Operação em curso",
                 "Aguarde a operação terminar antes de fechar a aplicação.",
-                parent=self,
             )
+            evento.ignore()
             return
-        self._a_fechar = True
         self.core.fechar()
-        self.destroy()
+        evento.accept()
+
+
+def main():
+    app = QApplication(sys.argv)
+    app.setApplicationName("E.N.A.")
+    janela = AppEna()
+    janela.show()
+    return app.exec()
 
 
 if __name__ == "__main__":
-    app = AppEna()
-    app.mainloop()
+    raise SystemExit(main())

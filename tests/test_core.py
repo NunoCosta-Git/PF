@@ -25,7 +25,8 @@ class ForenseCoreTests(unittest.TestCase):
     def test_raw_image_without_recognized_filesystem_stays_open_for_hashing(self):
         with tempfile.TemporaryDirectory() as pasta:
             imagem = Path(pasta) / "sem_sistema_ficheiros.dd"
-            imagem.write_bytes(b"ENA-raw-test-" * 8192)
+            dados_originais = b"ENA-raw-test-" * 8192
+            imagem.write_bytes(dados_originais)
             core = ForenseCore()
             try:
                 sucesso, mensagem = core.abrir_imagem(str(imagem))
@@ -33,6 +34,7 @@ class ForenseCoreTests(unittest.TestCase):
                 self.assertIsNone(core.fs)
                 self.assertTrue(core.calcular_hash()[0])
                 self.assertFalse(core.listar_diretorio("/")[0])
+                self.assertEqual(imagem.read_bytes(), dados_originais)
             finally:
                 core.fechar()
 
