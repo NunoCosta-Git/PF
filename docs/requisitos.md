@@ -21,7 +21,7 @@ Desenvolver, no contexto académico, uma aplicação desktop de análise forense
 | RF-06 | Procurar assinaturas JPEG, PNG e PDF em blocos e guardar candidatos com offset e tamanho de origem. | Desejável | Implementado; pesquisa heurística na imagem lógica completa, não apenas em espaço não alocado |
 | RF-07 | Extrair metadados EXIF comuns e coordenadas GPS de imagens compatíveis. | Desejável | Implementado com Pillow |
 | RF-08 | Gerar relatório PDF com hashes, listagem da raiz, resultados de carving, EXIF e limitações. | Essencial, MVP | Implementado |
-| RF-09 | Registar casos, evidências, operador, datas, hashes e ações de forma append-only. | Essencial, fase seguinte | Por fazer |
+| RF-09 | Registar casos, evidências, operador, datas, hashes e ações de forma append-only. | Essencial | Implementado parcialmente: SQLite local e triggers contra UPDATE/DELETE; ainda sem proteção contra adulteração externa |
 | RF-10 | Adicionar parsers (Registry, EVTX, logs Linux), timeline e pesquisa como módulos independentes. | Futuro | Por fazer |
 
 ## Requisitos não funcionais

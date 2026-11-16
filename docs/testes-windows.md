@@ -29,25 +29,26 @@ Executa a partir da raiz do projeto:
 .\venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
-O resultado esperado é `OK` para todos os testes. A suite verifica hashes conhecidos, carving de JPEG/PNG/PDF (incluindo assinatura dividida entre blocos), offset e conteúdo extraído, tags EXIF de referência, PDF válido, abertura RAW sem sistema de ficheiros e mensagens de erro.
+O resultado esperado é `OK` para todos os testes. A suite verifica hashes conhecidos, carving de JPEG/PNG/PDF (incluindo assinatura dividida entre blocos), offset e conteúdo extraído, tags EXIF de referência, PDF válido, abertura RAW sem sistema de ficheiros, mensagens de erro e persistência de casos/eventos, incluindo a imutabilidade dos registos.
 
 ## 3. Teste manual da interface e de E01
 
 1. Inicia a aplicação: `.\venv\Scripts\python.exe .\interface.py`.
-2. Escolhe **Abrir imagem de evidência** e seleciona um conjunto E01 de laboratório. Se a imagem tiver segmentos (`.E01`, `.E02`, …), mantém todos os segmentos na mesma pasta.
-3. Confirma no registo que a imagem foi aberta e que o sistema de ficheiros foi reconhecido, se suportado.
-4. Confirma que a lista mostra os nomes, tipos e tamanhos. Abre uma pasta com duplo clique e regressa com **Acima**.
-5. Seleciona **Calcular MD5 + SHA-256** e confirma que os dois valores aparecem no registo. Compara-os com hashes calculados por uma segunda ferramenta independente, aplicada à mesma representação dos dados.
-6. Escolhe uma pasta de trabalho separada da evidência e inicia **Carving JPEG / PNG / PDF**. Regista quantos candidatos foram extraídos, os offsets e os tamanhos; confirma que os ficheiros exportados abrem quando aplicável.
-7. Usa **Extrair EXIF de imagem** num JPEG de laboratório com fabricante/modelo conhecidos e, se existir, GPS de teste. Confirma os campos no registo da aplicação.
-8. Seleciona **Gerar relatório PDF** e guarda-o na pasta de resultados. Confirma que inclui caminho/tamanho, hashes, listagem da raiz quando disponível, carving, EXIF e notas de limitação.
-9. Fecha a aplicação e volta a abri-la antes de testar outra imagem.
+2. Cria ou seleciona um caso e indica o operador. O registo local é guardado em `dados\ena.sqlite3`.
+3. Escolhe **Abrir imagem de evidência** e seleciona um conjunto E01 de laboratório. Se a imagem tiver segmentos (`.E01`, `.E02`, …), mantém todos os segmentos na mesma pasta.
+4. Confirma no registo que a imagem foi aberta e que o sistema de ficheiros foi reconhecido, se suportado. A evidência e a abertura ficam registadas no caso.
+5. Confirma que a lista mostra os nomes, tipos e tamanhos. Abre uma pasta com duplo clique e regressa com **Acima**.
+6. Seleciona **Calcular MD5 + SHA-256** e confirma que os dois valores aparecem no registo. Compara-os com hashes calculados por uma segunda ferramenta independente, aplicada à mesma representação dos dados.
+7. Escolhe uma pasta de trabalho separada da evidência e inicia **Carving JPEG / PNG / PDF**. Regista quantos candidatos foram extraídos, os offsets e os tamanhos; confirma que os ficheiros exportados abrem quando aplicável.
+8. Usa **Extrair EXIF de imagem** num JPEG de laboratório com fabricante/modelo conhecidos e, se existir, GPS de teste. Confirma os campos no registo da aplicação.
+9. Seleciona **Gerar relatório PDF** e guarda-o na pasta de resultados. Confirma que inclui caminho/tamanho, hashes, listagem da raiz quando disponível, carving, EXIF e notas de limitação.
+10. Fecha a aplicação e volta a abri-la antes de testar outra imagem. Confirma que o caso permanece disponível e que os eventos anteriores continuam guardados.
 
 Uma imagem RAW de bytes aleatórios pode abrir para hashing e, ainda assim, não ter tabela de partições nem sistema de ficheiros reconhecível. Nesse caso, a mensagem de limitação é o resultado esperado; não é uma falha do hashing. O carving percorre a imagem lógica completa e não distingue ainda espaço alocado de não alocado: resultados são candidatos por assinatura, não prova de eliminação ou de recuperação completa. Cada candidato tem um limite de 128 MiB.
 
 ## 4. Registo dos resultados
 
-Para cada execução, anota no relatório: data/hora e fuso horário, operador, Windows e arquitetura, versão de Python, versões das dependências, nome e tamanho da imagem de teste, hashes de referência, passos realizados, resultado esperado, resultado obtido, divergências e limitações. Usa imagens de teste com resultados conhecidos e guarda o relatório fora da pasta da evidência.
+Para cada execução, anota no relatório: data/hora e fuso horário, operador, Windows e arquitetura, versão de Python, versões das dependências, nome e tamanho da imagem de teste, hashes de referência, passos realizados, resultado esperado, resultado obtido, divergências e limitações. Usa imagens de teste com resultados conhecidos e guarda o relatório fora da pasta da evidência. A base é append-only ao nível da aplicação e inclui triggers SQLite contra UPDATE/DELETE; esta medida não protege contra alteração direta ou substituição do ficheiro por alguém com acesso ao disco.
 
 ## 5. Limites deste teste
 

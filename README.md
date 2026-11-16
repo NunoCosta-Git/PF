@@ -12,8 +12,12 @@ Protótipo académico de uma aplicação desktop multiplataforma para abrir imag
 - Abre imagens E01 através de `libewf-python` (que fornece o módulo `pyewf`).
 - Procura assinaturas JPEG, PNG e PDF em blocos e extrai metadados EXIF/GPS de JPEGs recuperados.
 - Gera relatórios PDF com hashes, lista da raiz, offsets/tamanhos do carving, EXIF e limitações.
+- Regista casos, evidências, hashes e ações numa base SQLite local em `dados/ena.sqlite3`.
+- Protege os registos persistidos contra UPDATE/DELETE pela aplicação e por triggers SQLite.
 
 A imagem `teste.dd` existente no workspace não tem um sistema de ficheiros/tabela de partições reconhecido pelo backend testado. A aplicação consegue abri-la para hashing, mas não consegue mostrar ficheiros dessa imagem.
+
+Antes de abrir uma imagem, cria ou seleciona um caso e indica o operador. A abertura, os hashes e as operações de análise ficam associados ao caso na base local `dados/ena.sqlite3`, criada automaticamente. A base contém caminhos de evidências e resultados de análise; mantém-na protegida e fora de cópias públicas. A imutabilidade ao nível da aplicação/SQLite não impede a alteração ou substituição do ficheiro por alguém com acesso ao sistema de ficheiros.
 
 ## Windows
 
@@ -31,12 +35,12 @@ Instalar Python 3, `python3-venv` e as dependências de sistema necessárias par
 
 ## Limites importantes
 
-O carving atual é heurístico: percorre a imagem lógica completa, não apenas blocos não alocados; pode encontrar ficheiros alocados, falsos positivos ou conteúdo incompleto, e limita cada candidato a 128 MiB. Não é recuperação avançada de ficheiros eliminados. Este protótipo também **não** faz aquisição de discos físicos, não implementa bloqueio físico de escrita, cadeia de custódia persistente, validação formal, análise de RAM, parsers de artefactos, indexação ou timeline. Não deve ser apresentado como ferramenta validada para uso probatório. A imagem deve ser uma cópia forense já adquirida, e os testes devem usar imagens de laboratório.
+O carving atual é heurístico: percorre a imagem lógica completa, não apenas blocos não alocados; pode encontrar ficheiros alocados, falsos positivos ou conteúdo incompleto, e limita cada candidato a 128 MiB. Não é recuperação avançada de ficheiros eliminados. Este protótipo também **não** faz aquisição de discos físicos, não implementa bloqueio físico de escrita nem uma cadeia de custódia criptograficamente inviolável, validação formal, análise de RAM, parsers de artefactos, indexação ou timeline. Não deve ser apresentado como ferramenta validada para uso probatório. A imagem deve ser uma cópia forense já adquirida, e os testes devem usar imagens de laboratório.
 
 ## Próximas fases
 
 1. Distinguir blocos alocados e não alocados e validar recuperação contra imagens de referência antes de lhe chamar recuperação de apagados.
-2. Persistência de casos e cadeia de custódia append-only, com operador, data/hora, ação e hashes.
+2. Expandir a persistência de casos e a auditoria append-only com exportação/verificação independente e proveniência detalhada.
 3. Testes com imagens de referência conhecidas em Windows e Linux; relatório de validação e registo de versões.
 4. Parsers adicionais (por exemplo EVTX/Registry), timeline e pesquisa, cada um com testes de regressão e proveniência.
 

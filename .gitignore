@@ -17,3 +17,7 @@ venv/
 *.E01
 *.E02
 *.ex01
+
+# Base local de casos e cadeia de custódia
+dados/*.sqlite3
+dados/*.sqlite3-*
