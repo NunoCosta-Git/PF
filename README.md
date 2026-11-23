@@ -49,7 +49,7 @@ O plano recomendado é faseado para estabilizar a integridade antes de aumentar 
 6. **Pesquisa e timeline:** construir sobre artefactos normalizados e testados.
 7. **Memória e entrega:** integrar Volatility 3 isoladamente e validar instalação, operação offline, backup/restauro e comportamento em Windows/Linux.
 
-PySide6 já substituiu CustomTkinter na interface atual. Cada fase tem critérios de conclusão, riscos e justificação em [docs/planeamento-arquitetura.md](docs/planeamento-arquitetura.md). Se o prazo limitar o âmbito, priorizar uma base pequena testada e identificar claramente o restante como trabalho futuro.
+Cada fase tem critérios de conclusão, riscos e justificação em [docs/planeamento-arquitetura.md](docs/planeamento-arquitetura.md). Se o prazo limitar o âmbito, priorizar uma base pequena testada e identificar claramente o restante como trabalho futuro.
 
 O relatório de projeto descreve também aquisição, análise RAM com Volatility 3, dfVFS e controlo de acesso. A interface agora usa Qt/PySide6; dfVFS, aquisição, RAM e controlo de acesso ainda não estão implementados. A análise começa a partir de imagens já adquiridas; “operador” não significa autenticação, e o uso local/offline ainda não foi validado por teste formal de isolamento de rede.
 
