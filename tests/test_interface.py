@@ -1,3 +1,4 @@
+import hashlib
 import os
 import tempfile
 import threading
@@ -34,6 +35,7 @@ class AppEnaInterfaceTests(unittest.TestCase):
         self.assertIsInstance(self.window.combo_casos, QComboBox)
         self.assertIsInstance(self.window.btn_hash, QPushButton)
         self.assertFalse(self.window.btn_hash.isEnabled())
+        self.assertFalse(self.window.btn_comparar_hash.isEnabled())
         self.assertFalse(self.window.btn_carving.isEnabled())
 
     def test_case_creation_and_selection_update_case_controls(self):
@@ -60,6 +62,30 @@ class AppEnaInterfaceTests(unittest.TestCase):
 
         self.assertEqual(result[0][0], ("success", 42))
         self.assertIs(result[0][1], main_thread)
+
+    def test_hash_comparison_calculates_persists_and_audits_reference(self):
+        image = Path(self.temporary_directory.name) / "evidencia.dd"
+        image.write_bytes(b"conteudo de teste")
+        case_id = self.store.create_case("Caso", "Operador")
+        evidence_id = self.store.register_evidence(case_id, image, image.stat().st_size)
+        self.window.core.img = object()
+        self.window._definir_ocupado(False)
+
+        self.assertTrue(self.window.btn_comparar_hash.isEnabled())
+        success, result = self.window._executar_comparacao_hash(
+            str(image), case_id, evidence_id,
+            hashlib.sha256(image.read_bytes()).hexdigest(),
+        )
+
+        self.assertTrue(success, result)
+        self.assertTrue(result["comparacao"]["matches"])
+        self.assertEqual(result["comparacao"]["algorithm"], "sha256")
+        events = self.store.list_events(case_id)
+        self.assertEqual(events[-2]["action"], "hashes_calculated")
+        self.assertEqual(events[-1]["action"], "hash_reference_compared")
+        comparison_details = events[-1]["details"]
+        self.assertEqual(comparison_details["parameters"]["algorithm"], "sha256")
+        self.assertTrue(comparison_details["result"]["matches"])
 
 
 if __name__ == "__main__":

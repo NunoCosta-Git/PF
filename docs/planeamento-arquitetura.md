@@ -22,15 +22,15 @@ O desenvolvimento será incremental, orientado a riscos e dividido em fases com 
 
 ### Fase 2 — Consolidar o MVP e a integridade da evidência
 
-**Trabalho:** manter abertura read-only de imagens existentes, hashing por streaming, navegação suportada, carving heurístico, EXIF e PDF; acrescentar comparação explícita com hash de referência; associar de forma consistente cada resultado ao caso/evidência; completar proveniência dos eventos (ação, operador declarado, hora UTC, versão da aplicação, parâmetros e resultado); corrigir falhas de persistência de forma visível.
+**Trabalho:** manter abertura read-only de imagens existentes, hashing por streaming, navegação suportada, carving heurístico, EXIF e PDF; comparar hashes MD5/SHA-256 com uma referência introduzida pelo operador; associar resultados ao caso/evidência; persistir proveniência normalizada (versão da aplicação, parâmetros e resultado); corrigir falhas de persistência de forma visível. A comparação e a estrutura comum de proveniência dos eventos estão implementadas; falta validar manualmente os fluxos completos e a resposta a falhas de persistência.
 
 **Porquê nesta ordem:** após a migração estabilizada, hashing e proveniência são a base para confiar nos resultados das fases posteriores. Parsers, indexação e relatórios sem uma referência consistente à evidência de origem tornam-se difíceis de reproduzir ou auditar.
 
-**Critério de saída:** testes demonstram hashes de referência corretos, comparação igual/diferente, ausência de escrita nos bytes da imagem, erros visíveis e persistência de resultados e eventos. Documentar expressamente que SQLite append-only com triggers não é proteção contra adulteração externa.
+**Critério de saída:** testes demonstram hashes de referência corretos, comparação igual/diferente, ausência de escrita nos bytes da imagem, erros visíveis e persistência de resultados e eventos com versão, parâmetros e resultado. Documentar expressamente que SQLite append-only com triggers não é proteção contra adulteração externa.
 
 ### Fase 3 — Validar leitura e sistemas de ficheiros com imagens de referência
 
-**Trabalho:** criar ou selecionar imagens-fixture pequenas, legais e reproduzíveis com estruturas conhecidas; testar a deteção de partições, navegação, metadados e estados alocado/não alocado para cada sistema de ficheiros que se queira declarar suportado (por exemplo NTFS, FAT32 e ext4). Separar o teste de listagem de entradas eliminadas da recuperação efetiva do seu conteúdo.
+**Trabalho:** criar ou selecionar imagens-fixture pequenas, legais e reproduzíveis com estruturas conhecidas; usar o harness opcional `tests/test_filesystem_fixtures.py` para testar deteção, navegação, tamanhos e estado alocado/não alocado para cada sistema de ficheiros que se queira declarar suportado (por exemplo NTFS, FAT32 e ext4). Separar o teste de listagem de entradas eliminadas da recuperação efetiva do seu conteúdo. O harness está implementado; falta executá-lo com fixtures reais e documentar os resultados por formato.
 
 **Porquê antes de adicionar mais análise:** os parsers e a timeline dependem de leitura previsível e de metadados coerentes. Declarar suporte com base apenas na biblioteca não demonstra que o fluxo da aplicação funciona para aquele formato.
 

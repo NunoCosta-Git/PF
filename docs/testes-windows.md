@@ -29,7 +29,44 @@ Executa a partir da raiz do projeto:
 .\venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
-O resultado esperado é `OK` para todos os testes. A suite verifica hashes conhecidos, carving de JPEG/PNG/PDF (incluindo assinatura dividida entre blocos), offset e conteúdo extraído, tags EXIF de referência, PDF válido, abertura RAW sem sistema de ficheiros, mensagens de erro, persistência de casos/eventos e inicialização/estado básico da interface Qt. Testa também a imutabilidade dos registos.
+O resultado esperado é `OK` para todos os testes. A suite verifica hashes conhecidos, comparação de referência igual/diferente e sua auditoria, proveniência uniforme (versão, parâmetros e resultado), carving de JPEG/PNG/PDF (incluindo assinatura dividida entre blocos), offset e conteúdo extraído, tags EXIF de referência, PDF válido, abertura RAW sem sistema de ficheiros, mensagens de erro, persistência de casos/eventos e inicialização/estado básico da interface Qt. Testa também a imutabilidade dos registos.
+
+### Integração opcional com NTFS, FAT32 e ext4
+
+Foi adicionado um harness que valida reconhecimento pelo `pytsk3`, entradas esperadas em diretórios, tipo de entrada, tamanho e estado alocado/eliminado; calcula SHA-256 antes e depois para confirmar que a imagem não foi alterada. Não foram incluídas imagens binárias no repositório: usa fixtures pequenas, autorizadas e com conteúdo conhecido. Sem configurar um manifesto, o teste é marcado como ignorado, e nenhum sistema de ficheiros deve ser declarado validado só porque os testes unitários passaram.
+
+Cria um manifesto JSON fora do repositório, por exemplo:
+
+```json
+{
+	"fixtures": [
+		{
+			"name": "ntfs-laboratorio",
+			"image": "ntfs.dd",
+			"filesystem": "NTFS",
+			"directories": {
+				"/": [
+					{"name": "amostra.txt", "directory": false, "size_bytes": 18, "deleted": false},
+					{"name": "apagado.txt", "directory": false, "size_bytes": 12, "deleted": true},
+					{"name": "pasta", "directory": true, "deleted": false}
+				],
+				"/pasta": [
+					{"name": "interior.txt", "directory": false, "size_bytes": 7, "deleted": false}
+				]
+			}
+		}
+	]
+}
+```
+
+Adiciona uma entrada a `fixtures` para cada imagem (o campo `filesystem` aceita `NTFS`, `FAT32` ou `EXT4`). Os caminhos de `image` são relativos à localização do manifesto. Em `directories`, declara exatamente todas as entradas esperadas por diretório; ficheiros precisam de `size_bytes`, enquanto diretórios não. Inclui entradas eliminadas apenas quando a fixture e o resultado esperado demonstram essa flag. Os tamanhos do exemplo são ilustrativos: substitui-os pelos valores reais da tua fixture.
+
+No PowerShell, define `$env:ENA_FS_FIXTURE_MANIFEST` com o caminho absoluto para o manifesto e executa o teste específico. Se o teste falhar, verifica primeiro se o `pytsk3` desta instalação reconhece o formato e se os caminhos, tamanhos e flags do manifesto correspondem ao conteúdo conhecido. Guarda os hashes SHA-256 das fixtures e a sua origem no registo do projeto. Executa a suite completa depois da integração:
+
+```powershell
+$env:ENA_FS_FIXTURE_MANIFEST = "C:\lab\manifest.json"
+.\venv\Scripts\python.exe -m unittest discover -s tests -p test_filesystem_fixtures.py -v
+```
 
 ## 3. Teste manual da interface e de E01
 
@@ -39,10 +76,11 @@ O resultado esperado é `OK` para todos os testes. A suite verifica hashes conhe
 4. Confirma no registo que a imagem foi aberta e que o sistema de ficheiros foi reconhecido, se suportado. A evidência e a abertura ficam registadas no caso.
 5. Confirma que a lista mostra os nomes, tipos e tamanhos. Abre uma pasta com duplo clique e regressa com **Acima**.
 6. Seleciona **Calcular MD5 + SHA-256** e confirma que os dois valores aparecem no registo. Compara-os com hashes calculados por uma segunda ferramenta independente, aplicada à mesma representação dos dados.
-7. Escolhe uma pasta de trabalho separada da evidência e inicia **Carving JPEG / PNG / PDF**. Regista quantos candidatos foram extraídos, os offsets e os tamanhos; confirma que os ficheiros exportados abrem quando aplicável.
-8. Usa **Extrair EXIF de imagem** num JPEG de laboratório com fabricante/modelo conhecidos e, se existir, GPS de teste. Confirma os campos no registo da aplicação.
-9. Seleciona **Gerar relatório PDF** e guarda-o na pasta de resultados. Confirma que inclui caminho/tamanho, hashes, listagem da raiz quando disponível, carving, EXIF e notas de limitação.
-10. Fecha a aplicação e volta a abri-la antes de testar outra imagem. Confirma que o caso permanece disponível e que os eventos anteriores continuam guardados.
+7. Seleciona **Comparar hash de referência**, introduz um dos valores independentes calculados no passo anterior e confirma a indicação de coincidência. Repete com um valor deliberadamente alterado para confirmar a divergência e consulta ambos os eventos na auditoria; verifica que os detalhes incluem versão da aplicação, parâmetros e resultado. Em E01, usa o hash do conteúdo lógico, não o hash do ficheiro contêiner E01.
+8. Escolhe uma pasta de trabalho separada da evidência e inicia **Carving JPEG / PNG / PDF**. Regista quantos candidatos foram extraídos, os offsets e os tamanhos; confirma que os ficheiros exportados abrem quando aplicável.
+9. Usa **Extrair EXIF de imagem** num JPEG de laboratório com fabricante/modelo conhecidos e, se existir, GPS de teste. Confirma os campos no registo da aplicação.
+10. Seleciona **Gerar relatório PDF** e guarda-o na pasta de resultados. Confirma que inclui caminho/tamanho, hashes, listagem da raiz quando disponível, carving, EXIF e notas de limitação.
+11. Fecha a aplicação e volta a abri-la antes de testar outra imagem. Confirma que o caso permanece disponível e que os eventos anteriores continuam guardados.
 
 Uma imagem RAW de bytes aleatórios pode abrir para hashing e, ainda assim, não ter tabela de partições nem sistema de ficheiros reconhecível. Nesse caso, a mensagem de limitação é o resultado esperado; não é uma falha do hashing. O carving percorre a imagem lógica completa e não distingue ainda espaço alocado de não alocado: resultados são candidatos por assinatura, não prova de eliminação ou de recuperação completa. Cada candidato tem um limite de 128 MiB.
 

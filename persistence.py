@@ -8,6 +8,7 @@ from pathlib import Path
 
 
 DATABASE_PATH = Path(__file__).resolve().parent / "dados" / "ena.sqlite3"
+APPLICATION_VERSION = "0.1.0-dev"
 HASH_PATTERNS = {
     "md5": re.compile(r"^[0-9a-f]{32}$"),
     "sha256": re.compile(r"^[0-9a-f]{64}$"),
@@ -99,11 +100,27 @@ class PersistenceStore:
         return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
     @staticmethod
+    def normalize_reference_hash(reference_hash):
+        value = (reference_hash or "").strip().lower()
+        for algorithm, pattern in HASH_PATTERNS.items():
+            if pattern.fullmatch(value):
+                return algorithm, value
+        raise ValueError(
+            "Introduza um hash MD5 (32 caracteres) ou SHA-256 (64 caracteres) hexadecimal."
+        )
+
+    @staticmethod
     def _event_values(case_id, evidence_id, operator, action, details, occurred_at):
         if not operator or not operator.strip():
             raise ValueError("O operador do evento é obrigatório.")
         if not action or not action.strip():
             raise ValueError("A ação do evento é obrigatória.")
+        event_details = dict(details or {})
+        if "parameters" not in event_details or "result" not in event_details:
+            event_details = {"parameters": {}, "result": event_details}
+        event_details["application_version"] = APPLICATION_VERSION
+        event_details.setdefault("parameters", {})
+        event_details.setdefault("result", {})
         return (
             str(uuid.uuid4()),
             case_id,
@@ -111,7 +128,7 @@ class PersistenceStore:
             operator.strip(),
             action.strip(),
             occurred_at,
-            json.dumps(details or {}, ensure_ascii=False, sort_keys=True),
+            json.dumps(event_details, ensure_ascii=False, sort_keys=True),
         )
 
     def create_case(self, name, operator):
@@ -136,7 +153,15 @@ class PersistenceStore:
                 VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 self._event_values(
-                    case_id, None, operator, "case_created", {"name": name}, created_at
+                    case_id,
+                    None,
+                    operator,
+                    "case_created",
+                    {
+                        "parameters": {"name": name},
+                        "result": {"case_id": case_id},
+                    },
+                    created_at,
                 ),
             )
         return case_id
@@ -176,13 +201,29 @@ class PersistenceStore:
                     evidence_id,
                     case["operator"],
                     "evidence_opened",
-                    {"path": evidence_path, "size_bytes": size_bytes},
+                    {
+                        "parameters": {"path": evidence_path},
+                        "result": {"size_bytes": size_bytes},
+                    },
                     registered_at,
                 ),
             )
         return evidence_id
 
-    def record_event(self, case_id, evidence_id, action, details=None):
+    def record_event(
+        self, case_id, evidence_id, action, details=None, *, parameters=None, result=None
+    ):
+        if details is not None and (parameters is not None or result is not None):
+            raise ValueError("Use details ou os campos parameters/result, não ambos.")
+        if parameters is not None or result is not None:
+            event_details = {
+                "parameters": parameters or {},
+                "result": result or {},
+            }
+        elif isinstance(details, dict) and "parameters" in details and "result" in details:
+            event_details = details
+        else:
+            event_details = {"parameters": {}, "result": details or {}}
         occurred_at = self._timestamp()
         with self._connect() as connection:
             case = connection.execute(
@@ -197,7 +238,12 @@ class PersistenceStore:
                 if evidence is None or evidence["case_id"] != case_id:
                     raise ValueError("A evidência não pertence ao caso selecionado.")
             event = self._event_values(
-                case_id, evidence_id, case["operator"], action, details, occurred_at
+                case_id,
+                evidence_id,
+                case["operator"],
+                action,
+                event_details,
+                occurred_at,
             )
             connection.execute(
                 """
@@ -246,10 +292,64 @@ class PersistenceStore:
                     evidence_id,
                     evidence["operator"],
                     "hashes_calculated",
-                    {"md5": md5, "sha256": sha256},
+                    {
+                        "parameters": {"algorithms": ["MD5", "SHA-256"]},
+                        "result": {"md5": md5, "sha256": sha256},
+                    },
                     calculated_at,
                 ),
             )
+
+    def record_hash_comparison(
+        self, case_id, evidence_id, reference_hash, calculated_hashes
+    ):
+        algorithm, reference_value = self.normalize_reference_hash(reference_hash)
+        calculated_value = (calculated_hashes or {}).get(algorithm, "").lower()
+        if not HASH_PATTERNS[algorithm].fullmatch(calculated_value):
+            raise ValueError(f"O hash calculado {algorithm.upper()} é inválido.")
+        matches = reference_value == calculated_value
+        occurred_at = self._timestamp()
+        with self._connect() as connection:
+            evidence = connection.execute(
+                """
+                SELECT e.case_id, c.operator
+                FROM evidences e JOIN cases c ON c.id = e.case_id
+                WHERE e.id = ?
+                """,
+                (evidence_id,),
+            ).fetchone()
+            if evidence is None or evidence["case_id"] != case_id:
+                raise ValueError("A evidência não pertence ao caso selecionado.")
+            connection.execute(
+                """
+                INSERT INTO audit_events
+                    (id, case_id, evidence_id, operator, action, occurred_at, details_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                self._event_values(
+                    case_id,
+                    evidence_id,
+                    evidence["operator"],
+                    "hash_reference_compared",
+                    {
+                        "parameters": {
+                            "algorithm": algorithm,
+                            "reference_hash": reference_value,
+                        },
+                        "result": {
+                            "calculated_hash": calculated_value,
+                            "matches": matches,
+                        },
+                    },
+                    occurred_at,
+                ),
+            )
+        return {
+            "algorithm": algorithm,
+            "reference_hash": reference_value,
+            "calculated_hash": calculated_value,
+            "matches": matches,
+        }
 
     def list_events(self, case_id):
         with self._connect() as connection:

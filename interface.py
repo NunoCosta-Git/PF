@@ -119,6 +119,9 @@ class AppEna(QMainWindow):
         self.btn_relatorio = QPushButton("Gerar relatório PDF")
         self.btn_relatorio.clicked.connect(self.iniciar_relatorio)
         acoes.addWidget(self.btn_relatorio)
+        self.btn_comparar_hash = QPushButton("Comparar hash de referência")
+        self.btn_comparar_hash.clicked.connect(self.iniciar_comparacao_hash)
+        acoes.addWidget(self.btn_comparar_hash)
         self.btn_auditoria = QPushButton("Ver auditoria do caso")
         self.btn_auditoria.clicked.connect(self.ver_auditoria)
         acoes.addWidget(self.btn_auditoria)
@@ -238,6 +241,7 @@ class AppEna(QMainWindow):
         self.btn_selecionar.setText(texto_botao or "Abrir imagem de evidência")
         evidencia_disponivel = not ocupado and self.core.img is not None
         self.btn_hash.setEnabled(evidencia_disponivel)
+        self.btn_comparar_hash.setEnabled(evidencia_disponivel)
         self.btn_carving.setEnabled(evidencia_disponivel)
         self.btn_relatorio.setEnabled(evidencia_disponivel)
         self.btn_exif.setEnabled(not ocupado)
@@ -361,7 +365,10 @@ class AppEna(QMainWindow):
         sucesso, mensagem = self.core.abrir_imagem(caminho)
         if not sucesso:
             erro = self._registar_evento(
-                case_id, None, "image_open_failed", {"path": caminho, "error": mensagem}
+                case_id,
+                None,
+                "image_open_failed",
+                {"parameters": {"path": caminho}, "result": {"error": mensagem}},
             )
             if erro:
                 mensagem += f" Falha ao registar a auditoria: {erro}"
@@ -387,9 +394,12 @@ class AppEna(QMainWindow):
         mensagem_lista = mensagem if sucesso_lista else f"{mensagem} {resultado}"
         acao = "directory_listed" if sucesso_lista else "directory_list_unavailable"
         detalhes = (
-            {"path": "/", "entries": len(entradas)}
+            {
+                "parameters": {"path": "/"},
+                "result": {"entry_count": len(entradas)},
+            }
             if sucesso_lista
-            else {"path": "/", "reason": resultado}
+            else {"parameters": {"path": "/"}, "result": {"error": resultado}}
         )
         erro = self._registar_evento(case_id, evidence_id, acao, detalhes)
         if erro:
@@ -472,7 +482,10 @@ class AppEna(QMainWindow):
                 self._evidence_case_id,
                 self._evidence_id,
                 "directory_listed",
-                {"path": caminho, "entries": len(resultado)},
+                {
+                    "parameters": {"path": caminho},
+                    "result": {"entry_count": len(resultado)},
+                },
             )
             if erro:
                 return False, f"Diretório lido, mas a auditoria falhou: {erro}"
@@ -481,7 +494,7 @@ class AppEna(QMainWindow):
                 self._evidence_case_id,
                 self._evidence_id,
                 "directory_list_failed",
-                {"path": caminho, "error": resultado},
+                {"parameters": {"path": caminho}, "result": {"error": resultado}},
             )
             if erro:
                 resultado += f" Falha ao registar a auditoria: {erro}"
@@ -520,7 +533,13 @@ class AppEna(QMainWindow):
                 return False, f"Hashes calculados, mas não foi possível persistir o resultado: {exc}"
         else:
             erro = self._registar_evento(
-                case_id, evidence_id, "hash_calculation_failed", {"error": resultado}
+                case_id,
+                evidence_id,
+                "hash_calculation_failed",
+                {
+                    "parameters": {"algorithms": ["MD5", "SHA-256"]},
+                    "result": {"error": resultado},
+                },
             )
             if erro:
                 resultado += f" Falha ao registar a auditoria: {erro}"
@@ -536,6 +555,89 @@ class AppEna(QMainWindow):
         else:
             self._log_main(hashes)
             self._set_estado("Falha no cálculo do hash", "#ff7b72")
+
+    def iniciar_comparacao_hash(self):
+        if self._ocupado or not self.caminho_imagem:
+            return
+        referencia, aceite = QInputDialog.getText(
+            self,
+            "Comparar hash de referência",
+            "Cole um hash MD5 (32 caracteres) ou SHA-256 (64 caracteres), "
+            "calculado sobre a mesma representação lógica da evidência:",
+        )
+        if not aceite:
+            return
+        try:
+            algoritmo, referencia = self.store.normalize_reference_hash(referencia)
+        except ValueError as exc:
+            QMessageBox.warning(self, "Hash inválido", str(exc))
+            return
+
+        self._definir_ocupado(True, "A comparar hash…")
+        self._log_main(f"A calcular e comparar {algoritmo.upper()} de referência…")
+        caminho = self.caminho_imagem
+        case_id, evidence_id = self._evidence_case_id, self._evidence_id
+        self._start_worker(
+            lambda: self._executar_comparacao_hash(
+                caminho, case_id, evidence_id, referencia
+            ),
+            self._finalizar_comparacao_hash,
+        )
+
+    def _executar_comparacao_hash(
+        self, caminho, case_id, evidence_id, referencia
+    ):
+        sucesso, resultado = self.core.calcular_hash(caminho)
+        if not sucesso:
+            erro = self._registar_evento(
+                case_id,
+                evidence_id,
+                "hash_calculation_failed",
+                {
+                    "parameters": {
+                        "algorithms": ["MD5", "SHA-256"],
+                        "operation": "reference_comparison",
+                        "reference_hash": referencia,
+                    },
+                    "result": {"error": resultado},
+                },
+            )
+            if erro:
+                resultado += f" Falha ao registar a auditoria: {erro}"
+            return False, resultado
+        try:
+            self.store.record_hashes(
+                case_id, evidence_id, resultado["md5"], resultado["sha256"]
+            )
+            comparacao = self.store.record_hash_comparison(
+                case_id, evidence_id, referencia, resultado
+            )
+        except Exception as exc:
+            return False, f"Hash calculado, mas não foi possível registar a comparação: {exc}"
+        return True, {"hashes": resultado, "comparacao": comparacao}
+
+    def _finalizar_comparacao_hash(self, resultado):
+        sucesso, dados = resultado
+        self._definir_ocupado(False)
+        if not sucesso:
+            self._log_main(dados)
+            self._set_estado("Falha na comparação do hash", "#ff7b72")
+            return
+
+        hashes = dados["hashes"]
+        comparacao = dados["comparacao"]
+        algoritmo = comparacao["algorithm"].upper()
+        self._log_main(f"MD5:    {hashes['md5']}")
+        self._log_main(f"SHA256: {hashes['sha256']}")
+        self._log_main(
+            f"Hash de referência ({algoritmo}): {comparacao['reference_hash']}"
+        )
+        if comparacao["matches"]:
+            self._log_main(f"VERIFICADO: o hash {algoritmo} coincide com a referência.")
+            self._set_estado("Hash de referência coincide", "#3fb950")
+        else:
+            self._log_main(f"DIVERGÊNCIA: o hash {algoritmo} não coincide com a referência.")
+            self._set_estado("Hash de referência diferente", "#ff7b72")
 
     def iniciar_carving(self):
         if self._ocupado or not self.caminho_imagem:
@@ -565,21 +667,37 @@ class AppEna(QMainWindow):
         acao = "carving_completed" if sucesso else "carving_failed"
         detalhes = (
             {
-                "output_directory": pasta,
-                "files": [
-                    {
-                        "type": item["tipo"],
-                        "name": item["nome"],
-                        "path": item["caminho"],
-                        "offset": item["offset"],
-                        "size": item["tamanho"],
-                        "exif": item.get("exif", {}),
-                    }
-                    for item in resultado
-                ],
+                "parameters": {
+                    "output_directory": pasta,
+                    "max_files": 50,
+                    "max_file_size_bytes": 128 * 1024 * 1024,
+                    "signature_types": ["JPEG", "PNG", "PDF"],
+                },
+                "result": {
+                    "files": [
+                        {
+                            "type": item["tipo"],
+                            "name": item["nome"],
+                            "path": item["caminho"],
+                            "offset": item["offset"],
+                            "size": item["tamanho"],
+                            "exif": item.get("exif", {}),
+                        }
+                        for item in resultado
+                    ],
+                    "file_count": len(resultado),
+                },
             }
             if sucesso
-            else {"error": resultado}
+            else {
+                "parameters": {
+                    "output_directory": pasta,
+                    "max_files": 50,
+                    "max_file_size_bytes": 128 * 1024 * 1024,
+                    "signature_types": ["JPEG", "PNG", "PDF"],
+                },
+                "result": {"error": resultado},
+            }
         )
         erro = self._registar_evento(case_id, evidence_id, acao, detalhes)
         if erro:
@@ -645,9 +763,10 @@ class AppEna(QMainWindow):
             case_id,
             evidence_id,
             "exif_extracted" if sucesso else "exif_extraction_failed",
-            {"path": caminho, "metadata": resultado}
-            if sucesso
-            else {"path": caminho, "error": resultado},
+            {
+                "parameters": {"path": caminho},
+                "result": {"metadata": resultado} if sucesso else {"error": resultado},
+            },
         )
         if erro:
             return False, f"{resultado}; falha ao registar a auditoria: {erro}"
@@ -698,7 +817,13 @@ class AppEna(QMainWindow):
         sucesso_hash, hashes = self.core.calcular_hash(caminho_imagem)
         if not sucesso_hash:
             erro = self._registar_evento(
-                case_id, evidence_id, "report_generation_failed", {"error": hashes}
+                case_id,
+                evidence_id,
+                "report_generation_failed",
+                {
+                    "parameters": {"output_path": caminho_pdf},
+                    "result": {"error": hashes},
+                },
             )
             if erro:
                 hashes += f" Falha ao registar a auditoria: {erro}"
@@ -726,9 +851,24 @@ class AppEna(QMainWindow):
             )
         acao = "report_created" if sucesso_pdf else "report_generation_failed"
         detalhes = (
-            {"path": caminho_pdf, "md5": hashes["md5"], "sha256": hashes["sha256"]}
+            {
+                "parameters": {
+                    "output_path": caminho_pdf,
+                    "source_image": caminho_imagem,
+                },
+                "result": {
+                    "md5": hashes["md5"],
+                    "sha256": hashes["sha256"],
+                },
+            }
             if sucesso_pdf
-            else {"path": caminho_pdf, "error": mensagem}
+            else {
+                "parameters": {
+                    "output_path": caminho_pdf,
+                    "source_image": caminho_imagem,
+                },
+                "result": {"error": mensagem},
+            }
         )
         erro = self._registar_evento(case_id, evidence_id, acao, detalhes)
         if erro:

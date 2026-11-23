@@ -7,17 +7,21 @@ Protótipo académico de uma aplicação desktop para abrir imagens forenses, ca
 - Abre imagens RAW (`.dd`, `.raw`, `.img`) em modo de leitura.
 - Deteta sistema de ficheiros direto ou em partições quando suportado pelo `pytsk3`.
 - Calcula MD5 e SHA-256 por streaming, sem carregar a imagem toda em memória.
+- Compara um MD5 ou SHA-256 fornecido com o valor calculado e regista o resultado na auditoria do caso.
 - Lista diretórios e assinala entradas marcadas como eliminadas pelo sistema de ficheiros.
 - Mantém hashing e operações de leitura fora da thread da interface.
 - Abre imagens E01 através de `libewf-python` (que fornece o módulo `pyewf`).
 - Procura assinaturas JPEG, PNG e PDF em blocos e extrai metadados EXIF/GPS de JPEGs recuperados.
 - Gera relatórios PDF com hashes, lista da raiz, offsets/tamanhos do carving, EXIF e limitações.
-- Regista casos, evidências, hashes e ações numa base SQLite local em `dados/ena.sqlite3`.
+- Regista casos, evidências, hashes e ações numa base SQLite local em `dados/ena.sqlite3`, com versão da aplicação, parâmetros e resultados nos eventos de auditoria.
 - Protege os registos persistidos contra UPDATE/DELETE pela aplicação e por triggers SQLite.
+- Inclui harness de integração opcional para testar NTFS, FAT32 e ext4 com imagens-fixture externas; esses formatos ainda não estão validados neste workspace.
 
 A imagem `teste.dd` existente no workspace não tem um sistema de ficheiros/tabela de partições reconhecido pelo backend testado. A aplicação consegue abri-la para hashing, mas não consegue mostrar ficheiros dessa imagem.
 
 Antes de abrir uma imagem, cria ou seleciona um caso e indica o operador. A abertura, os hashes e as operações de análise ficam associados ao caso na base local `dados/ena.sqlite3`, criada automaticamente. A base contém caminhos de evidências e resultados de análise; mantém-na protegida e fora de cópias públicas. A imutabilidade ao nível da aplicação/SQLite não impede a alteração ou substituição do ficheiro por alguém com acesso ao sistema de ficheiros.
+
+Cada novo evento de auditoria inclui `application_version`, `parameters` e `result` nos detalhes. A versão atual de desenvolvimento é `0.1.0-dev`, definida em [persistence.py](persistence.py); deve ser atualizada ao preparar uma nova versão do programa. Os eventos já existentes na base mantêm o formato anterior.
 
 ## Windows
 
@@ -43,7 +47,7 @@ O plano recomendado é faseado para estabilizar a integridade antes de aumentar 
 
 1. **Consolidar a interface Qt/PySide6:** manter o núcleo forense e a persistência independentes da GUI e validar os fluxos migrados.
 2. **Consolidar MVP/integridade:** comparar hashes com referência e completar proveniência persistida para cada operação.
-3. **Validar sistemas de ficheiros:** testar NTFS/FAT32/ext4 com imagens-fixture e resultados conhecidos; separar listagem de eliminados de recuperação.
+3. **Validar sistemas de ficheiros:** executar o harness opcional com imagens-fixture NTFS/FAT32/ext4 e resultados conhecidos; separar listagem de eliminados de recuperação. Ver instruções em [docs/testes-windows.md](docs/testes-windows.md).
 4. **Aquisição delimitada:** implementar aquisição verificada apenas se o âmbito e os recursos de teste forem definidos; caso contrário, manter importação de imagens externas.
 5. **Parsers de artefactos:** adicionar Registry, EVTX ou logs Linux um a um, com testes e referência de origem.
 6. **Pesquisa e timeline:** construir sobre artefactos normalizados e testados.
